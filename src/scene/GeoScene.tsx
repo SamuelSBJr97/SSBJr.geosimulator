@@ -8,11 +8,20 @@ export type GeoSceneProps = {
   cameraMode: 'first' | 'iso'
 }
 
+type TerrainData = {
+  positions: Vector3[]
+  colors: Color[]
+  heights: number[]
+}
+
 const PLANET_RADIUS = 4.8
 const VOXEL_SIZE = 0.45
 const LAT_STEPS = 28
 const LON_STEPS = 52
 const EARTH_AXIAL_TILT = (23.44 * Math.PI) / 180
+const STEP_MAX = VOXEL_SIZE * 2.6
+const GRAVITY_SPRING = 10
+const GRAVITY_DAMP = 4.5
 
 const COLORS = {
   ocean: new Color('#1c4fa1'),
@@ -37,9 +46,10 @@ function seededNoise(seed: number, i: number, j: number) {
   return rng()
 }
 
-function generatePlanet(seed: number) {
+function generatePlanet(seed: number): TerrainData {
   const positions: Vector3[] = []
   const colors: Color[] = []
+  const heights = new Array<number>(LAT_STEPS * LON_STEPS).fill(1)
 
   for (let lat = 0; lat < LAT_STEPS; lat += 1) {
     const phi = (lat / (LAT_STEPS - 1)) * Math.PI
@@ -57,6 +67,7 @@ function generatePlanet(seed: number) {
       const isOcean = noise < 0.3
       const isLava = noise > 0.93
       const height = isOcean ? 1 : Math.floor(1 + noise * 3)
+      heights[lat * LON_STEPS + lon] = height
 
       const baseColor = isOcean
         ? COLORS.ocean
@@ -74,12 +85,12 @@ function generatePlanet(seed: number) {
     }
   }
 
-  return { positions, colors }
+  return { positions, colors, heights }
 }
 
-function PlanetVoxels({ seed }: { seed: number }) {
+function PlanetVoxels({ terrain }: { terrain: TerrainData }) {
   const instancedRef = useRef<InstancedMesh>(null!)
-  const { positions, colors } = useMemo(() => generatePlanet(seed), [seed])
+  const { positions, colors } = terrain
 
   useEffect(() => {
     const mesh = instancedRef.current
@@ -172,18 +183,40 @@ function useKeyboard() {
   return keysRef
 }
 
+function sampleSurfaceRadius(normal: Vector3, heights: number[]) {
+  const phi = Math.acos(Math.min(Math.max(normal.y, -1), 1))
+  const theta = Math.atan2(normal.z, normal.x)
+
+  const lat = Math.round((phi / Math.PI) * (LAT_STEPS - 1))
+  const lon =
+    Math.round(((theta + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * LON_STEPS) % LON_STEPS
+
+  const height = heights[lat * LON_STEPS + lon] ?? 1
+  return PLANET_RADIUS + height * VOXEL_SIZE
+}
+
 type PlayerState = {
   position: Vector3
   forward: Vector3
   normal: Vector3
 }
 
-function Player({ seed, stateRef }: { seed: number; stateRef: React.MutableRefObject<PlayerState> }) {
+function Player({
+  seed,
+  stateRef,
+  terrain,
+}: {
+  seed: number
+  stateRef: React.MutableRefObject<PlayerState>
+  terrain: TerrainData
+}) {
   const meshRef = useRef<Mesh>(null!)
   const keys = useKeyboard()
 
   const positionRef = useRef<Vector3>(stateRef.current.position)
   const forwardRef = useRef<Vector3>(stateRef.current.forward)
+  const radialRef = useRef<number>(PLANET_RADIUS)
+  const radialVelocityRef = useRef<number>(0)
 
   const temps = useMemo(
     () => ({
@@ -214,6 +247,11 @@ function Player({ seed, stateRef }: { seed: number; stateRef: React.MutableRefOb
     temps.north.crossVectors(temps.normal, temps.east).normalize()
     forwardRef.current.copy(temps.north)
     stateRef.current.normal.copy(temps.normal)
+
+    const surfaceRadius = sampleSurfaceRadius(temps.normal, terrain.heights)
+    radialRef.current = surfaceRadius
+    radialVelocityRef.current = 0
+    positionRef.current.copy(temps.normal).multiplyScalar(surfaceRadius)
   }, [seed, temps])
 
   useFrame((_state, delta) => {
@@ -231,10 +269,30 @@ function Player({ seed, stateRef }: { seed: number; stateRef: React.MutableRefOb
         .addScaledVector(temps.east, inputX)
         .normalize()
 
-      positionRef.current.addScaledVector(temps.move, 2.1 * delta)
-      positionRef.current.normalize().multiplyScalar(PLANET_RADIUS)
-      forwardRef.current.copy(temps.move)
+      const candidate = positionRef.current.clone().addScaledVector(temps.move, 2.1 * delta)
+      candidate.normalize()
+
+      const currentSurface = sampleSurfaceRadius(temps.normal, terrain.heights)
+      const candidateSurface = sampleSurfaceRadius(candidate, terrain.heights)
+
+      // Colisão lateral simples: não subir degraus muito altos
+      if (Math.abs(candidateSurface - currentSurface) <= STEP_MAX) {
+        positionRef.current.copy(candidate)
+        forwardRef.current.copy(temps.move)
+      }
     }
+
+    // Gravidade suave: converge para o raio da superfície sem “snap”
+    const targetSurface = sampleSurfaceRadius(temps.normal, terrain.heights)
+    const radial = radialRef.current
+    const radialVelocity = radialVelocityRef.current
+    const accel = (targetSurface - radial) * GRAVITY_SPRING - radialVelocity * GRAVITY_DAMP
+    const nextVelocity = radialVelocity + accel * delta
+    const nextRadial = radial + nextVelocity * delta
+
+    radialRef.current = nextRadial
+    radialVelocityRef.current = nextVelocity
+    positionRef.current.copy(temps.normal).multiplyScalar(nextRadial)
 
     stateRef.current.position.copy(positionRef.current)
     stateRef.current.forward.copy(forwardRef.current)
@@ -354,6 +412,8 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
     normal: new Vector3(0, 1, 0),
   })
 
+  const terrain = useMemo(() => generatePlanet(seed), [seed])
+
   const sunPosition = useMemo(() => {
     const distance = PLANET_RADIUS * 3
     const y = Math.sin(EARTH_AXIAL_TILT) * distance
@@ -367,8 +427,8 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
       <ambientLight intensity={0.75} />
       <hemisphereLight intensity={0.45} color="#dbe8ff" groundColor="#182238" />
       <directionalLight position={sunPosition} intensity={1.35} />
-      <PlanetVoxels seed={seed} />
-      <Player seed={seed} stateRef={playerStateRef} />
+      <PlanetVoxels terrain={terrain} />
+      <Player seed={seed} stateRef={playerStateRef} terrain={terrain} />
       <CameraRig mode={cameraMode} stateRef={playerStateRef} />
     </Canvas>
   )
