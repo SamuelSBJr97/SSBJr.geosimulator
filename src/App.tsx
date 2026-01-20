@@ -58,7 +58,7 @@ export default function App() {
           <Suspense fallback={<div className="loading">Carregando cenário 3D…</div>}>
             <GeoScene seed={seed} cameraMode={cameraMode} />
             <div className="hint">
-              WASD/Setas para andar • Câmera {cameraMode === 'first' ? '1ª pessoa' : 'isométrica'}
+              WASD/Setas para andar • Câmera {cameraMode === 'first' ? '1ª pessoa' : 'isométrica (arraste + scroll)'}
             </div>
           </Suspense>
         )}

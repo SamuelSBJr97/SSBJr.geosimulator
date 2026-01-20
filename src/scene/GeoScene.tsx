@@ -255,15 +255,71 @@ function Player({ seed, stateRef }: { seed: number; stateRef: React.MutableRefOb
 
 function CameraRig({ mode, stateRef }: { mode: GeoSceneProps['cameraMode']; stateRef: React.MutableRefObject<PlayerState> }) {
   const { camera } = useThree()
+  const orbitRef = useRef({
+    azimuth: Math.PI / 4,
+    polar: Math.PI / 3,
+    distance: PLANET_RADIUS * 2.4,
+    dragging: false,
+    lastX: 0,
+    lastY: 0,
+  })
   const temp = useMemo(
     () => ({
       offset: new Vector3(),
       target: new Vector3(),
       up: new Vector3(0, 1, 0),
-      isoDir: new Vector3(1, 1, 1).normalize(),
     }),
     [],
   )
+
+  useEffect(() => {
+    if (mode !== 'iso') return
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return
+      orbitRef.current.dragging = true
+      orbitRef.current.lastX = event.clientX
+      orbitRef.current.lastY = event.clientY
+    }
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!orbitRef.current.dragging) return
+      const dx = event.clientX - orbitRef.current.lastX
+      const dy = event.clientY - orbitRef.current.lastY
+
+      orbitRef.current.azimuth -= dx * 0.005
+      orbitRef.current.polar -= dy * 0.005
+
+      orbitRef.current.polar = Math.min(Math.max(0.35, orbitRef.current.polar), 1.35)
+
+      orbitRef.current.lastX = event.clientX
+      orbitRef.current.lastY = event.clientY
+    }
+
+    const onPointerUp = () => {
+      orbitRef.current.dragging = false
+    }
+
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault()
+      orbitRef.current.distance = Math.min(
+        Math.max(PLANET_RADIUS * 1.2, orbitRef.current.distance + event.deltaY * 0.01),
+        PLANET_RADIUS * 6,
+      )
+    }
+
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('wheel', onWheel, { passive: false })
+
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('wheel', onWheel)
+    }
+  }, [mode])
 
   useFrame((_state, delta) => {
     const { position, forward, normal } = stateRef.current
@@ -277,9 +333,13 @@ function CameraRig({ mode, stateRef }: { mode: GeoSceneProps['cameraMode']; stat
     }
 
     // Isométrico: câmera fixa em um ângulo alto, olhando para o player
-    temp.offset.copy(temp.isoDir).multiplyScalar(PLANET_RADIUS * 2.2)
     temp.target.copy(position)
-    camera.position.lerp(temp.offset.add(position), 0.1)
+    temp.offset.setFromSphericalCoords(
+      orbitRef.current.distance,
+      orbitRef.current.polar,
+      orbitRef.current.azimuth,
+    )
+    camera.position.lerp(temp.offset.add(temp.target), 0.12)
     camera.lookAt(temp.target)
     camera.up.copy(temp.up)
   })
@@ -304,8 +364,9 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
   return (
     <Canvas className="canvas" camera={{ position: [0, PLANET_RADIUS + 1.6, 0], fov: 62 }}>
       <color attach="background" args={['#05070c']} />
-      <ambientLight intensity={0.45} />
-      <directionalLight position={sunPosition} intensity={1.1} />
+      <ambientLight intensity={0.75} />
+      <hemisphereLight intensity={0.45} color="#dbe8ff" groundColor="#182238" />
+      <directionalLight position={sunPosition} intensity={1.35} />
       <PlanetVoxels seed={seed} />
       <Player seed={seed} stateRef={playerStateRef} />
       <CameraRig mode={cameraMode} stateRef={playerStateRef} />
