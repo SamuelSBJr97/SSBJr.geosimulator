@@ -3,8 +3,9 @@ import { useEffect, useMemo, useRef } from 'react'
 import { Color, Matrix4, Vector3 } from 'three'
 import type { InstancedMesh, Mesh } from 'three'
 
-type GeoSceneProps = {
+export type GeoSceneProps = {
   seed: number
+  cameraMode: 'first' | 'iso'
 }
 
 const PLANET_RADIUS = 4.8
@@ -170,12 +171,18 @@ function useKeyboard() {
   return keysRef
 }
 
-function Player({ seed }: { seed: number }) {
+type PlayerState = {
+  position: Vector3
+  forward: Vector3
+  normal: Vector3
+}
+
+function Player({ seed, stateRef }: { seed: number; stateRef: React.MutableRefObject<PlayerState> }) {
   const meshRef = useRef<Mesh>(null!)
-  const { camera } = useThree()
   const keys = useKeyboard()
-  const positionRef = useRef<Vector3>(new Vector3())
-  const forwardRef = useRef<Vector3>(new Vector3(0, 0, -1))
+
+  const positionRef = useRef<Vector3>(stateRef.current.position)
+  const forwardRef = useRef<Vector3>(stateRef.current.forward)
 
   const temps = useMemo(
     () => ({
@@ -205,6 +212,7 @@ function Player({ seed }: { seed: number }) {
     temps.east.crossVectors(temps.up, temps.normal).normalize()
     temps.north.crossVectors(temps.normal, temps.east).normalize()
     forwardRef.current.copy(temps.north)
+    stateRef.current.normal.copy(temps.normal)
   }, [seed, temps])
 
   useFrame((_state, delta) => {
@@ -227,14 +235,12 @@ function Player({ seed }: { seed: number }) {
       forwardRef.current.copy(temps.move)
     }
 
-    temps.offset.copy(temps.normal).multiplyScalar(0.35)
-    temps.camPos.copy(positionRef.current).add(temps.offset)
-    camera.position.lerp(temps.camPos, 0.35)
-
-    temps.lookAt.copy(positionRef.current).addScaledVector(forwardRef.current, 2)
-    camera.lookAt(temps.lookAt)
+    stateRef.current.position.copy(positionRef.current)
+    stateRef.current.forward.copy(forwardRef.current)
+    stateRef.current.normal.copy(temps.normal)
 
     meshRef.current.position.copy(positionRef.current)
+    temps.lookAt.copy(positionRef.current).addScaledVector(forwardRef.current, 2)
     meshRef.current.lookAt(temps.lookAt)
   })
 
@@ -246,14 +252,55 @@ function Player({ seed }: { seed: number }) {
   )
 }
 
-export default function GeoScene({ seed }: GeoSceneProps) {
+function CameraRig({ mode, stateRef }: { mode: GeoSceneProps['cameraMode']; stateRef: React.MutableRefObject<PlayerState> }) {
+  const { camera } = useThree()
+  const temp = useMemo(
+    () => ({
+      offset: new Vector3(),
+      target: new Vector3(),
+      up: new Vector3(0, 1, 0),
+      isoDir: new Vector3(1, 1, 1).normalize(),
+    }),
+    [],
+  )
+
+  useFrame((_state, delta) => {
+    const { position, forward, normal } = stateRef.current
+
+    if (mode === 'first') {
+      temp.offset.copy(normal).multiplyScalar(0.35)
+      temp.target.copy(position).addScaledVector(forward, 2)
+      camera.position.lerp(temp.offset.add(position), 0.35)
+      camera.lookAt(temp.target)
+      return
+    }
+
+    // Isométrico: câmera fixa em um ângulo alto, olhando para o player
+    temp.offset.copy(temp.isoDir).multiplyScalar(PLANET_RADIUS * 2.2)
+    temp.target.copy(position)
+    camera.position.lerp(temp.offset.add(position), 0.1)
+    camera.lookAt(temp.target)
+    camera.up.copy(temp.up)
+  })
+
+  return null
+}
+
+export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
+  const playerStateRef = useRef<PlayerState>({
+    position: new Vector3(0, PLANET_RADIUS, 0),
+    forward: new Vector3(0, 0, -1),
+    normal: new Vector3(0, 1, 0),
+  })
+
   return (
     <Canvas className="canvas" camera={{ position: [0, PLANET_RADIUS + 1.6, 0], fov: 62 }}>
       <color attach="background" args={['#05070c']} />
       <ambientLight intensity={0.45} />
       <directionalLight position={[8, 6, 4]} intensity={1.1} />
       <PlanetVoxels seed={seed} />
-      <Player seed={seed} />
+      <Player seed={seed} stateRef={playerStateRef} />
+      <CameraRig mode={cameraMode} stateRef={playerStateRef} />
     </Canvas>
   )
 }

@@ -10,6 +10,13 @@
   backdrop-filter: blur(8px);
 }
 
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .header h1 {
   margin: 0;
   font-size: 16px;
@@ -21,6 +28,26 @@
   margin: 6px 0 0;
   color: rgba(255, 255, 255, 0.72);
   font-size: 13px;
+}
+
+.cameraToggle {
+  display: flex;
+  gap: 8px;
+}
+
+.chip {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.88);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chip.active {
+  background: rgba(108, 196, 255, 0.2);
+  border-color: rgba(108, 196, 255, 0.5);
 }
 
 .stage {
