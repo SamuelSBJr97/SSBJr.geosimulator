@@ -187,11 +187,26 @@ function sampleSurfaceRadius(normal: Vector3, heights: number[]) {
   const phi = Math.acos(Math.min(Math.max(normal.y, -1), 1))
   const theta = Math.atan2(normal.z, normal.x)
 
-  const lat = Math.round((phi / Math.PI) * (LAT_STEPS - 1))
-  const lon =
-    Math.round(((theta + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * LON_STEPS) % LON_STEPS
+  const latF = (phi / Math.PI) * (LAT_STEPS - 1)
+  const lonF = ((theta + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * LON_STEPS
 
-  const height = heights[lat * LON_STEPS + lon] ?? 1
+  const lat0 = Math.floor(latF)
+  const lon0 = Math.floor(lonF) % LON_STEPS
+  const lat1 = Math.min(lat0 + 1, LAT_STEPS - 1)
+  const lon1 = (lon0 + 1) % LON_STEPS
+
+  const t = latF - lat0
+  const u = lonF - lon0
+
+  const h00 = heights[lat0 * LON_STEPS + lon0] ?? 1
+  const h10 = heights[lat1 * LON_STEPS + lon0] ?? 1
+  const h01 = heights[lat0 * LON_STEPS + lon1] ?? 1
+  const h11 = heights[lat1 * LON_STEPS + lon1] ?? 1
+
+  const h0 = h00 * (1 - t) + h10 * t
+  const h1 = h01 * (1 - t) + h11 * t
+  const height = h0 * (1 - u) + h1 * u
+
   return PLANET_RADIUS + height * VOXEL_SIZE
 }
 
@@ -275,8 +290,8 @@ function Player({
       const currentSurface = sampleSurfaceRadius(temps.normal, terrain.heights)
       const candidateSurface = sampleSurfaceRadius(candidate, terrain.heights)
 
-      // Colisão lateral simples: não subir degraus muito altos
-      if (Math.abs(candidateSurface - currentSurface) <= STEP_MAX) {
+      // Colisão lateral suave: impede apenas degraus muito altos
+      if (candidateSurface - currentSurface <= STEP_MAX) {
         positionRef.current.copy(candidate)
         forwardRef.current.copy(temps.move)
       }
