@@ -1,6 +1,6 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
-import { Color, Matrix4, Vector3 } from 'three'
+import { Color, Matrix4, Vector3, BoxHelper } from 'three'
 import type { InstancedMesh, Mesh } from 'three'
 
 export type GeoSceneProps = {
@@ -20,6 +20,7 @@ const LAT_STEPS = 28
 const LON_STEPS = 52
 const EARTH_AXIAL_TILT = (23.44 * Math.PI) / 180
 const STEP_MAX = VOXEL_SIZE * 2.6
+const DECAL_IGNORE = VOXEL_SIZE * 0.6
 const GRAVITY_SPRING = 10
 const GRAVITY_DAMP = 4.5
 
@@ -226,6 +227,7 @@ function Player({
   terrain: TerrainData
 }) {
   const meshRef = useRef<Mesh>(null!)
+  const helperRef = useRef<BoxHelper | null>(null)
   const keys = useKeyboard()
 
   const positionRef = useRef<Vector3>(stateRef.current.position)
@@ -269,6 +271,21 @@ function Player({
     positionRef.current.copy(temps.normal).multiplyScalar(surfaceRadius)
   }, [seed, temps])
 
+  useEffect(() => {
+    const mesh = meshRef.current
+    if (!mesh) return
+    const helper = new BoxHelper(mesh, 0xff6b6b)
+    helper.visible = true
+    mesh.parent?.add(helper)
+    helperRef.current = helper
+    return () => {
+      if (helperRef.current) {
+        helperRef.current.parent?.remove(helperRef.current)
+        helperRef.current = null
+      }
+    }
+  }, [])
+
   useFrame((_state, delta) => {
     temps.normal.copy(positionRef.current).normalize()
     temps.east.crossVectors(temps.up, temps.normal).normalize()
@@ -284,16 +301,30 @@ function Player({
         .addScaledVector(temps.east, inputX)
         .normalize()
 
-      const candidate = positionRef.current.clone().addScaledVector(temps.move, 2.1 * delta)
+      // Projetar movimento na tangente da superfície para deslizar
+      const moveWorld = temps.move.clone()
+      const nDot = moveWorld.dot(temps.normal)
+      moveWorld.addScaledVector(temps.normal, -nDot).normalize()
+
+      const candidate = positionRef.current.clone().addScaledVector(moveWorld, 2.1 * delta)
       candidate.normalize()
 
       const currentSurface = sampleSurfaceRadius(temps.normal, terrain.heights)
-      const candidateSurface = sampleSurfaceRadius(candidate, terrain.heights)
+      let candidateSurface = sampleSurfaceRadius(candidate, terrain.heights)
+
+      // Ignorar decalques / pequenas irregularidades
+      if (candidateSurface - currentSurface <= DECAL_IGNORE) {
+        candidateSurface = currentSurface
+      }
 
       // Colisão lateral suave: impede apenas degraus muito altos
       if (candidateSurface - currentSurface <= STEP_MAX) {
-        positionRef.current.copy(candidate)
-        forwardRef.current.copy(temps.move)
+        if (candidateSurface === currentSurface) {
+          positionRef.current.copy(candidate).multiplyScalar(currentSurface)
+        } else {
+          positionRef.current.copy(candidate)
+        }
+        forwardRef.current.copy(moveWorld)
       }
     }
 
@@ -314,6 +345,7 @@ function Player({
     stateRef.current.normal.copy(temps.normal)
 
     meshRef.current.position.copy(positionRef.current)
+    helperRef.current?.update()
     temps.lookAt.copy(positionRef.current).addScaledVector(forwardRef.current, 2)
     meshRef.current.lookAt(temps.lookAt)
   })
