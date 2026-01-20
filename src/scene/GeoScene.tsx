@@ -424,9 +424,9 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
   return (
     <Canvas className="canvas" camera={{ position: [0, PLANET_RADIUS + 1.6, 0], fov: 62 }}>
       <color attach="background" args={['#05070c']} />
-      <ambientLight intensity={0.75} />
-      <hemisphereLight intensity={0.45} color="#dbe8ff" groundColor="#182238" />
-      <directionalLight position={sunPosition} intensity={1.35} />
+      <ambientLight intensity={1.35} />
+      <hemisphereLight intensity={0.85} color="#e6f1ff" groundColor="#24324f" />
+      <directionalLight position={sunPosition} intensity={1.6} />
       <PlanetVoxels terrain={terrain} />
       <Player seed={seed} stateRef={playerStateRef} terrain={terrain} />
       <CameraRig mode={cameraMode} stateRef={playerStateRef} />
