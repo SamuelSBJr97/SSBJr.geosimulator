@@ -12,6 +12,7 @@ const PLANET_RADIUS = 4.8
 const VOXEL_SIZE = 0.45
 const LAT_STEPS = 28
 const LON_STEPS = 52
+const EARTH_AXIAL_TILT = (23.44 * Math.PI) / 180
 
 const COLORS = {
   ocean: new Color('#1c4fa1'),
@@ -293,11 +294,18 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
     normal: new Vector3(0, 1, 0),
   })
 
+  const sunPosition = useMemo(() => {
+    const distance = PLANET_RADIUS * 3
+    const y = Math.sin(EARTH_AXIAL_TILT) * distance
+    const z = Math.cos(EARTH_AXIAL_TILT) * distance
+    return [distance, y, z] as const
+  }, [])
+
   return (
     <Canvas className="canvas" camera={{ position: [0, PLANET_RADIUS + 1.6, 0], fov: 62 }}>
       <color attach="background" args={['#05070c']} />
       <ambientLight intensity={0.45} />
-      <directionalLight position={[8, 6, 4]} intensity={1.1} />
+      <directionalLight position={sunPosition} intensity={1.1} />
       <PlanetVoxels seed={seed} />
       <Player seed={seed} stateRef={playerStateRef} />
       <CameraRig mode={cameraMode} stateRef={playerStateRef} />
