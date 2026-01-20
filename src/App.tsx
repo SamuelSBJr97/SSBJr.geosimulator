@@ -5,6 +5,7 @@ const GeoScene = lazy(() => import('./scene/GeoScene'))
 
 export default function App() {
   const [isRunning, setIsRunning] = useState(false)
+  const [seed, setSeed] = useState(() => Math.floor(Math.random() * 1_000_000_000))
 
   return (
     <div className="app">
@@ -20,14 +21,20 @@ export default function App() {
             <p className="starterText">
               Clique para carregar o cenário 3D (lazy-load). Isso deixa o bundle inicial menor.
             </p>
-            <button className="button" onClick={() => setIsRunning(true)}>
+            <button
+              className="button"
+              onClick={() => {
+                setSeed(Math.floor(Math.random() * 1_000_000_000))
+                setIsRunning(true)
+              }}
+            >
               Iniciar simulação
             </button>
           </div>
         ) : (
           <Suspense fallback={<div className="loading">Carregando cenário 3D…</div>}>
-            <GeoScene />
-            <div className="hint">Arraste para orbitar • Scroll para zoom</div>
+            <GeoScene seed={seed} />
+            <div className="hint">WASD/Setas para andar • Câmera em 1ª pessoa</div>
           </Suspense>
         )}
       </main>
