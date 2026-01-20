@@ -37,3 +37,13 @@ Para publicar:
 3) **Branch**: `main` e **Folder**: `/docs`
 
 Observação: `public/.nojekyll` é copiado para o build para evitar interferência do Jekyll no Pages.
+
+## Guia para IA (consistência)
+
+Consulte o guia para manter consistência de geração procedural, escala e performance:
+
+- [AI_GUIDE.md](AI_GUIDE.md)
+
+## Guia técnico (diagramas)
+
+- [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md)
