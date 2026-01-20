@@ -1,6 +1,6 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
-import { Color, Matrix4, Vector3, BoxHelper } from 'three'
+import { Color, Matrix4, Vector3 } from 'three'
 import type { InstancedMesh, Mesh } from 'three'
 
 export type GeoSceneProps = {
@@ -21,6 +21,8 @@ const LON_STEPS = 52
 const EARTH_AXIAL_TILT = (23.44 * Math.PI) / 180
 const STEP_MAX = VOXEL_SIZE * 2.6
 const DECAL_IGNORE = VOXEL_SIZE * 0.6
+const PLAYER_RADIUS = 0.16
+const PLAYER_HEIGHT = 0.6
 const GRAVITY_SPRING = 10
 const GRAVITY_DAMP = 4.5
 
@@ -227,7 +229,7 @@ function Player({
   terrain: TerrainData
 }) {
   const meshRef = useRef<Mesh>(null!)
-  const helperRef = useRef<BoxHelper | null>(null)
+  const helperMeshRef = useRef<Mesh>(null!)
   const keys = useKeyboard()
 
   const positionRef = useRef<Vector3>(stateRef.current.position)
@@ -271,20 +273,7 @@ function Player({
     positionRef.current.copy(temps.normal).multiplyScalar(surfaceRadius)
   }, [seed, temps])
 
-  useEffect(() => {
-    const mesh = meshRef.current
-    if (!mesh) return
-    const helper = new BoxHelper(mesh, 0xff6b6b)
-    helper.visible = true
-    mesh.parent?.add(helper)
-    helperRef.current = helper
-    return () => {
-      if (helperRef.current) {
-        helperRef.current.parent?.remove(helperRef.current)
-        helperRef.current = null
-      }
-    }
-  }, [])
+  // helper cylinder is rendered as a child mesh in JSX below
 
   useFrame((_state, delta) => {
     temps.normal.copy(positionRef.current).normalize()
@@ -309,21 +298,34 @@ function Player({
       const candidate = positionRef.current.clone().addScaledVector(moveWorld, 2.1 * delta)
       candidate.normalize()
 
-      const currentSurface = sampleSurfaceRadius(temps.normal, terrain.heights)
-      let candidateSurface = sampleSurfaceRadius(candidate, terrain.heights)
+      // Amostrar ao redor do colisor cilíndrico para simular um cilindro que 'anda sobre' decalques
+      const samples = 8
+      let currentMax = -Infinity
+      let candidateMax = -Infinity
+
+      for (let i = 0; i < samples; i++) {
+        const ang = (i / samples) * Math.PI * 2
+        const offset = temps.east.clone().multiplyScalar(Math.cos(ang)).addScaledVector(temps.north, Math.sin(ang)).multiplyScalar(PLAYER_RADIUS)
+
+        const samplePos = positionRef.current.clone().add(offset).normalize()
+        const sampleCandPos = candidate.clone().add(offset).normalize()
+
+        const sSurf = sampleSurfaceRadius(samplePos, terrain.heights)
+        const cSurf = sampleSurfaceRadius(sampleCandPos, terrain.heights)
+
+        if (sSurf > currentMax) currentMax = sSurf
+        if (cSurf > candidateMax) candidateMax = cSurf
+      }
 
       // Ignorar decalques / pequenas irregularidades
-      if (candidateSurface - currentSurface <= DECAL_IGNORE) {
-        candidateSurface = currentSurface
+      if (candidateMax - currentMax <= DECAL_IGNORE) {
+        candidateMax = currentMax
       }
 
       // Colisão lateral suave: impede apenas degraus muito altos
-      if (candidateSurface - currentSurface <= STEP_MAX) {
-        if (candidateSurface === currentSurface) {
-          positionRef.current.copy(candidate).multiplyScalar(currentSurface)
-        } else {
-          positionRef.current.copy(candidate)
-        }
+      if (candidateMax - currentMax <= STEP_MAX) {
+        // ajustar posição para o raio apropriado
+        positionRef.current.copy(candidate).multiplyScalar(candidateMax)
         forwardRef.current.copy(moveWorld)
       }
     }
@@ -345,15 +347,18 @@ function Player({
     stateRef.current.normal.copy(temps.normal)
 
     meshRef.current.position.copy(positionRef.current)
-    helperRef.current?.update()
     temps.lookAt.copy(positionRef.current).addScaledVector(forwardRef.current, 2)
     meshRef.current.lookAt(temps.lookAt)
   })
 
   return (
     <mesh ref={meshRef}>
-      <capsuleGeometry args={[0.16, 0.3, 6, 12]} />
+      <capsuleGeometry args={[PLAYER_RADIUS, 0.3, 6, 12]} />
       <meshStandardMaterial color="#e9f2ff" roughness={0.4} />
+      <mesh ref={helperMeshRef} position={[0, -PLAYER_HEIGHT / 2 + 0.02, 0]}>
+        <cylinderGeometry args={[PLAYER_RADIUS, PLAYER_RADIUS, PLAYER_HEIGHT, 16]} />
+        <meshBasicMaterial color="#ff6b6b" wireframe={true} />
+      </mesh>
     </mesh>
   )
 }
