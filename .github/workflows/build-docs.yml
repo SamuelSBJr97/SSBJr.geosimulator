@@ -1,0 +1,36 @@
+name: Build docs (GitHub Pages)
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build (to docs/)
+        run: npm run build
+
+      - name: Commit docs/
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore(pages): update docs'
+          file_pattern: docs
