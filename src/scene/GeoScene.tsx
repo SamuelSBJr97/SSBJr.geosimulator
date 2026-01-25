@@ -441,46 +441,40 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const rockNormal = useTexture(basePath + 'textures/Rock058_1K-JPG_NormalGL.jpg')
   const rockRoughness = useTexture(basePath + 'textures/Rock058_1K-JPG_Roughness.jpg')
 
-  // Rapier physics world for debris (loaded dynamically to ensure WASM initialization)
-  const rapierRef = useRef<any | null>(null)
-  const rapierLibRef = useRef<any | null>(null)
+  // Physics worker (Rapier lives in the worker and is loaded only when needed)
+  const physWorkerRef = useRef<Worker | null>(null)
+  const debrisPositionsRef = useRef<Vector3[]>([])
+  const spawnQueueRef = useRef<Array<Array<{ x: number; y: number; z: number }>>>([])
+  const workerInitedRef = useRef(false)
   useEffect(() => {
-    let mounted = true
-    ;(async () => {
-      try {
-        const R = await import('@dimforge/rapier3d-compat')
-        rapierLibRef.current = R
-        if (R.init) {
-          try {
-            await R.init()
-          } catch {}
-        }
-        if (!mounted) return
-        const world = new R.World({ x: 0, y: -9.81, z: 0 })
-        rapierRef.current = world
-
-        // initialize debris pool after world is ready
-        const DEBRIS_POOL = 24
-        const pool: Array<{ body: any; collider: any; active: boolean }> = []
-        for (let i = 0; i < DEBRIS_POOL; i++) {
-          const rb = world.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(0, -1000, 0))
-          const collider = world.createCollider(R.ColliderDesc.cuboid(0.1, 0.1, 0.1), rb)
-          pool.push({ body: rb, collider, active: false })
-        }
-        debrisPoolRef.current = pool
-        if (debrisMeshRef.current) debrisMeshRef.current.count = DEBRIS_POOL
-      } catch (e) {
-        // if rapier fails to load, leave physics disabled
-        rapierRef.current = null
-        rapierLibRef.current = null
-      }
-    })()
     return () => {
-      mounted = false
-      if (rapierRef.current) rapierRef.current = null
-      rapierLibRef.current = null
+      if (physWorkerRef.current) {
+        physWorkerRef.current.terminate()
+        physWorkerRef.current = null
+      }
     }
   }, [])
+
+  function ensureWorker() {
+    if (physWorkerRef.current) return
+    const worker = new Worker(new URL('./physics.worker.ts', import.meta.url), { type: 'module' })
+    physWorkerRef.current = worker
+    worker.onmessage = (ev) => {
+      const msg = ev.data
+      if (msg.type === 'inited') {
+        workerInitedRef.current = true
+        // drain queue
+        while (spawnQueueRef.current.length > 0) {
+          const q = spawnQueueRef.current.shift()!
+          worker.postMessage({ type: 'spawn', positions: q })
+        }
+      } else if (msg.type === 'update') {
+        const arr = msg.positions || []
+        debrisPositionsRef.current = arr.map((p: any) => new Vector3(p.x, p.y, p.z))
+      }
+    }
+    worker.postMessage({ type: 'init' })
+  }
 
   type Debris = {
     id: number
@@ -498,38 +492,8 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const rockInstRef = useRef<InstancedMesh | null>(null)
   const dirtInstRef = useRef<InstancedMesh | null>(null)
 
-  // Debris pool (optimized for low-power devices)
-  const DEBRIS_POOL = 24
-  const debrisPoolRef = useRef<Array<{ body: RAPIER.RigidBody; collider: RAPIER.Collider; active: boolean }>>([])
-  const poolNextRef = useRef(0)
-
-  // initialize pool when world ready
-  useEffect(() => {
-    const world = rapierRef.current
-    if (!world) return
-    const pool: Array<{ body: RAPIER.RigidBody; collider: RAPIER.Collider; active: boolean }> = []
-    for (let i = 0; i < DEBRIS_POOL; i++) {
-      const rb = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, -1000, 0))
-      const collider = world.createCollider(RAPIER.ColliderDesc.cuboid(0.1, 0.1, 0.1), rb)
-      // reduce solver cost: small mass, default settings
-      pool.push({ body: rb, collider, active: false })
-    }
-    debrisPoolRef.current = pool
-    // set debris instanced mesh capacity
-    if (debrisMeshRef.current) debrisMeshRef.current.count = DEBRIS_POOL
-    return () => {
-      // destroy colliders/bodies if world is torn down
-      debrisPoolRef.current.forEach((p) => {
-        try {
-          world.removeCollider(p.collider)
-        } catch {}
-        try {
-          world.removeRigidBody(p.body)
-        } catch {}
-      })
-      debrisPoolRef.current = []
-    }
-  }, [rapierRef.current])
+  // Debris pool size used for instanced mesh capacity
+  const DEBRIS_POOL = 12
 
   // Physics step and update instanced debris transforms
   useFrame((_state, delta) => {
@@ -538,25 +502,16 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
     world.timestep = Math.min(delta, 1 / 30)
     world.step()
 
-    // Update instances for debris from pooled rigidbodies
-    const pool = debrisPoolRef.current
-    if (pool.length > 0 && debrisMeshRef.current) {
+    // Update instances for debris from worker positions
+    const positions = debrisPositionsRef.current
+    if (positions.length > 0 && debrisMeshRef.current) {
       const tmp = new Object3D()
-      let written = 0
-      for (let i = 0; i < pool.length; i++) {
-        const p = pool[i]
-        if (!p.active) continue
-        const t = p.body.translation()
-        // deactivate if fallen far below scene to free slot
-        if (t.y < -20) {
-          p.active = false
-          continue
-        }
-        tmp.position.set(t.x, t.y, t.z)
+      for (let i = 0; i < positions.length && i < DEBRIS_POOL; i++) {
+        tmp.position.copy(positions[i])
         tmp.updateMatrix()
-        debrisMeshRef.current.setMatrixAt(written++, tmp.matrix)
+        debrisMeshRef.current.setMatrixAt(i, tmp.matrix)
       }
-      debrisMeshRef.current.count = written
+      debrisMeshRef.current.count = Math.min(positions.length, DEBRIS_POOL)
       debrisMeshRef.current.instanceMatrix.needsUpdate = true
     }
   })
@@ -636,6 +591,7 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
     const localArr = [local.x, local.y, local.z]
 
     const staticPositions: Vector3[] = []
+    const spawnPositions: Array<{ x: number; y: number; z: number }> = []
 
     for (let ix = 0; ix < n; ix++) {
       for (let iy = 0; iy < n; iy++) {
@@ -653,43 +609,26 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
           if (!inPrism) {
             staticPositions.push(new Vector3(cx, cy, cz))
           } else {
-            // spawn pooled rigidbody debris for this piece
-            const pool = debrisPoolRef.current
-            if (pool.length > 0) {
-              const idx = poolNextRef.current % pool.length
-              poolNextRef.current = (poolNextRef.current + 1) % pool.length
-              const item = pool[idx]
-              item.active = true
-              // position body and give small random impulse
-              try {
-                item.body.setTranslation({ x: cx, y: cy, z: cz }, true)
-                item.body.setLinvel({ x: (Math.random() - 0.5) * 1.5, y: 1.2 + Math.random() * 1.2, z: (Math.random() - 0.5) * 1.5 }, true)
-                item.body.setAngvel({ x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 2, z: (Math.random() - 0.5) * 2 }, true)
-              } catch (e) {
-                // ignore if body operations fail
-              }
-            }
+            // collect spawn positions for worker; instant removal (no animation)
+            spawnPositions.push({ x: cx, y: cy, z: cz })
           }
         }
       }
     }
 
     setTerrain({ ...terrain, positions: newPositions.concat(staticPositions), colors: newColors.concat(Array(staticPositions.length).fill(COLORS.rock)) })
-    // update debris instanced mesh count and matrices
-    const pool = debrisPoolRef.current
-    if (debrisMeshRef.current && pool.length > 0) {
-      const tmp = new Object3D()
-      let written = 0
-      for (let i = 0; i < pool.length; i++) {
-        const p = pool[i]
-        if (!p.active) continue
-        const t = p.body.translation()
-        tmp.position.set(t.x, t.y, t.z)
-        tmp.updateMatrix()
-        debrisMeshRef.current.setMatrixAt(written++, tmp.matrix)
+    // send spawn positions to worker (create worker lazily)
+    if (spawnPositions.length > 0) {
+      ensureWorker()
+      if (physWorkerRef.current) {
+        if (workerInitedRef.current) {
+          physWorkerRef.current.postMessage({ type: 'spawn', positions: spawnPositions })
+        } else {
+          spawnQueueRef.current.push(spawnPositions)
+        }
       }
-      debrisMeshRef.current.count = Math.max(0, written)
-      debrisMeshRef.current.instanceMatrix.needsUpdate = true
+      // reflect immediate positions for visual feedback until worker steps
+      debrisPositionsRef.current = spawnPositions.map((p) => new Vector3(p.x, p.y, p.z))
     }
   }
 
