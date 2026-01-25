@@ -16,6 +16,7 @@ type TerrainData = {
 
 const PLANET_RADIUS = 4.8
 const VOXEL_SIZE = 1.0
+const WORLD_SIZE = 50
 const LAT_STEPS = 28
 const LON_STEPS = 52
 const EARTH_AXIAL_TILT = (23.44 * Math.PI) / 180
@@ -33,6 +34,7 @@ const COLORS = {
   sand: new Color('#c2a46b'),
   grass: new Color('#4a7c59'),
   snow: new Color('#ffffff'),
+  dirt: new Color('#8B4513'),
 }
 
 function mulberry32(seed: number) {
@@ -54,43 +56,36 @@ function seededNoise(seed: number, i: number, j: number) {
 function generatePlanet(seed: number): TerrainData {
   const positions: Vector3[] = []
   const colors: Color[] = []
-  const heights = new Array<number>(LAT_STEPS * LON_STEPS).fill(1)
+  const heights = new Array<number>(WORLD_SIZE * WORLD_SIZE).fill(1)
 
-  for (let lat = 0; lat < LAT_STEPS; lat += 1) {
-    const phi = (lat / (LAT_STEPS - 1)) * Math.PI
-    const biome = phi < Math.PI * 0.3 ? 'polar' : phi > Math.PI * 0.7 ? 'desert' : 'temperate'
+  for (let x = -WORLD_SIZE / 2; x < WORLD_SIZE / 2; x++) {
+    for (let z = -WORLD_SIZE / 2; z < WORLD_SIZE / 2; z++) {
+      const noise = seededNoise(seed, x, z)
+      const height = Math.floor(1 + noise * 5)
+      const index = (x + WORLD_SIZE / 2) * WORLD_SIZE + (z + WORLD_SIZE / 2)
+      heights[index] = height
 
-    for (let lon = 0; lon < LON_STEPS; lon += 1) {
-      const theta = (lon / LON_STEPS) * Math.PI * 2
-      const noise = seededNoise(seed, lat, lon)
+      for (let y = 0; y < height; y++) {
+        positions.push(new Vector3(x * VOXEL_SIZE, y * VOXEL_SIZE, z * VOXEL_SIZE))
+        colors.push(y === height - 1 ? COLORS.grass : COLORS.dirt)
+      }
+    }
+  }
 
-      const normal = new Vector3(
-        Math.sin(phi) * Math.cos(theta),
-        Math.cos(phi),
-        Math.sin(phi) * Math.sin(theta),
-      ).normalize()
+  // Add some marble stones
+  for (let i = 0; i < 20; i++) {
+    const x = Math.floor(Math.random() * WORLD_SIZE) - WORLD_SIZE / 2
+    const z = Math.floor(Math.random() * WORLD_SIZE) - WORLD_SIZE / 2
+    const index = (x + WORLD_SIZE / 2) * WORLD_SIZE + (z + WORLD_SIZE / 2)
+    const height = heights[index]
 
-      const isOcean = noise < 0.3
-      const isLava = noise > 0.93
-      const height = isOcean ? 1 : Math.floor(1 + noise * 10)
-      heights[lat * LON_STEPS + lon] = height
-
-      const baseColor = isOcean
-        ? COLORS.ocean
-        : isLava
-          ? COLORS.lava
-          : biome === 'polar'
-            ? COLORS.snow
-            : biome === 'desert'
-              ? COLORS.sand
-              : noise > 0.8
-                ? COLORS.sand
-                : COLORS.rock
-
-      for (let h = 0; h < height; h += 1) {
-        const position = normal.clone().multiplyScalar(PLANET_RADIUS + h * VOXEL_SIZE)
-        positions.push(position)
-        colors.push(baseColor.clone())
+    // Place a 2x2x2 marble block
+    for (let dx = 0; dx < 2; dx++) {
+      for (let dy = 0; dy < 2; dy++) {
+        for (let dz = 0; dz < 2; dz++) {
+          positions.push(new Vector3((x + dx) * VOXEL_SIZE, (height + dy) * VOXEL_SIZE, (z + dz) * VOXEL_SIZE))
+          colors.push(COLORS.rock)
+        }
       }
     }
   }
@@ -184,31 +179,13 @@ function useKeyboard() {
   return keysRef
 }
 
-function sampleSurfaceRadius(normal: Vector3, heights: number[]) {
-  const phi = Math.acos(Math.min(Math.max(normal.y, -1), 1))
-  const theta = Math.atan2(normal.z, normal.x)
-
-  const latF = (phi / Math.PI) * (LAT_STEPS - 1)
-  const lonF = ((theta + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * LON_STEPS
-
-  const lat0 = Math.floor(latF)
-  const lon0 = Math.floor(lonF) % LON_STEPS
-  const lat1 = Math.min(lat0 + 1, LAT_STEPS - 1)
-  const lon1 = (lon0 + 1) % LON_STEPS
-
-  const t = latF - lat0
-  const u = lonF - lon0
-
-  const h00 = heights[lat0 * LON_STEPS + lon0] ?? 1
-  const h10 = heights[lat1 * LON_STEPS + lon0] ?? 1
-  const h01 = heights[lat0 * LON_STEPS + lon1] ?? 1
-  const h11 = heights[lat1 * LON_STEPS + lon1] ?? 1
-
-  const h0 = h00 * (1 - t) + h10 * t
-  const h1 = h01 * (1 - t) + h11 * t
-  const height = h0 * (1 - u) + h1 * u
-
-  return PLANET_RADIUS + height * VOXEL_SIZE
+function sampleSurfaceHeight(position: Vector3, heights: number[]) {
+  const x = Math.round(position.x / VOXEL_SIZE)
+  const z = Math.round(position.z / VOXEL_SIZE)
+  const clampedX = Math.max(-WORLD_SIZE / 2, Math.min(WORLD_SIZE / 2 - 1, x))
+  const clampedZ = Math.max(-WORLD_SIZE / 2, Math.min(WORLD_SIZE / 2 - 1, z))
+  const index = (clampedX + WORLD_SIZE / 2) * WORLD_SIZE + (clampedZ + WORLD_SIZE / 2)
+  return heights[index] * VOXEL_SIZE
 }
 
 type PlayerState = {
@@ -218,11 +195,9 @@ type PlayerState = {
 }
 
 function Player({
-  seed,
   stateRef,
   terrain,
 }: {
-  seed: number
   stateRef: React.MutableRefObject<PlayerState>
   terrain: TerrainData
 }) {
@@ -232,131 +207,36 @@ function Player({
 
   const positionRef = useRef<Vector3>(stateRef.current.position)
   const forwardRef = useRef<Vector3>(stateRef.current.forward)
-  const radialRef = useRef<number>(PLANET_RADIUS)
-  const radialVelocityRef = useRef<number>(0)
-
-  const temps = useMemo(
-    () => ({
-      up: new Vector3(0, 1, 0),
-      normal: new Vector3(),
-      east: new Vector3(),
-      north: new Vector3(),
-      move: new Vector3(),
-      camPos: new Vector3(),
-      lookAt: new Vector3(),
-      offset: new Vector3(),
-    }),
-    [],
-  )
-
-  useEffect(() => {
-    const rng = mulberry32(seed)
-    const theta = rng() * Math.PI * 2
-    const phi = rng() * Math.PI
-    positionRef.current.set(
-      PLANET_RADIUS * Math.sin(phi) * Math.cos(theta),
-      PLANET_RADIUS * Math.cos(phi),
-      PLANET_RADIUS * Math.sin(phi) * Math.sin(theta),
-    )
-
-    temps.normal.copy(positionRef.current).normalize()
-    temps.east.crossVectors(temps.up, temps.normal).normalize()
-    temps.north.crossVectors(temps.normal, temps.east).normalize()
-    forwardRef.current.copy(temps.north)
-    stateRef.current.normal.copy(temps.normal)
-
-    const surfaceRadius = sampleSurfaceRadius(temps.normal, terrain.heights)
-    radialRef.current = surfaceRadius
-    radialVelocityRef.current = 0
-    positionRef.current.copy(temps.normal).multiplyScalar(surfaceRadius)
-  }, [seed, temps])
 
   // helper cylinder is rendered as a child mesh in JSX below
 
-  useFrame((_state, delta) => {
-    temps.normal.copy(positionRef.current).normalize()
-    temps.east.crossVectors(temps.up, temps.normal).normalize()
-    temps.north.crossVectors(temps.normal, temps.east).normalize()
+  useFrame((state, delta) => {
+    const { camera } = state
 
-    const inputX = (keys.current.right ? 1 : 0) - (keys.current.left ? 1 : 0)
-    const inputY = (keys.current.forward ? 1 : 0) - (keys.current.back ? 1 : 0)
+    const move = new Vector3()
+    if (keys.current.forward) move.z -= 1
+    if (keys.current.back) move.z += 1
+    if (keys.current.left) move.x -= 1
+    if (keys.current.right) move.x += 1
 
-    if (inputX !== 0 || inputY !== 0) {
-      temps.move
-        .set(0, 0, 0)
-        .addScaledVector(temps.north, inputY)
-        .addScaledVector(temps.east, inputX)
-        .normalize()
-
-      // Projetar movimento na tangente da superfície para deslizar
-      const moveWorld = temps.move.clone()
-      const nDot = moveWorld.dot(temps.normal)
-      moveWorld.addScaledVector(temps.normal, -nDot).normalize()
-
-      const candidate = positionRef.current.clone().addScaledVector(moveWorld, 2.1 * delta)
-      candidate.normalize()
-
-      // Amostrar ao redor do colisor cilíndrico para simular um cilindro que 'anda sobre' decalques
-      const samples = 8
-      let currentMax = -Infinity
-      let candidateMax = -Infinity
-
-      for (let i = 0; i < samples; i++) {
-        const ang = (i / samples) * Math.PI * 2
-        const offset = temps.east.clone().multiplyScalar(Math.cos(ang)).addScaledVector(temps.north, Math.sin(ang)).multiplyScalar(PLAYER_RADIUS)
-
-        const samplePos = positionRef.current.clone().add(offset).normalize()
-        const sampleCandPos = candidate.clone().add(offset).normalize()
-
-        const sSurf = sampleSurfaceRadius(samplePos, terrain.heights)
-        const cSurf = sampleSurfaceRadius(sampleCandPos, terrain.heights)
-
-        if (sSurf > currentMax) currentMax = sSurf
-        if (cSurf > candidateMax) candidateMax = cSurf
-      }
-
-      // Ignorar decalques / pequenas irregularidades
-      if (candidateMax - currentMax <= DECAL_IGNORE) {
-        candidateMax = currentMax
-      }
-
-      // Colisão lateral suave: impede apenas degraus muito altos
-      if (candidateMax - currentMax <= STEP_MAX) {
-        // ajustar posição para o raio apropriado
-        positionRef.current.copy(candidate).multiplyScalar(candidateMax)
-        forwardRef.current.copy(moveWorld)
-      }
+    if (move.length() > 0) {
+      move.normalize().multiplyScalar(delta * 5)
+      positionRef.current.add(move)
     }
 
-    // Gravidade suave: converge para o raio da superfície sem “snap”
-    const targetSurface = sampleSurfaceRadius(temps.normal, terrain.heights)
-    const radial = radialRef.current
-    const radialVelocity = radialVelocityRef.current
-    const accel = (targetSurface - radial) * GRAVITY_SPRING - radialVelocity * GRAVITY_DAMP
-    const nextVelocity = radialVelocity + accel * delta
-    const nextRadial = radial + nextVelocity * delta
+    positionRef.current.y = sampleSurfaceHeight(positionRef.current, terrain.heights) + PLAYER_HEIGHT
 
-    radialRef.current = nextRadial
-    radialVelocityRef.current = nextVelocity
-    positionRef.current.copy(temps.normal).multiplyScalar(nextRadial)
+    camera.position.copy(positionRef.current)
+    camera.lookAt(positionRef.current.clone().add(forwardRef.current))
 
     stateRef.current.position.copy(positionRef.current)
     stateRef.current.forward.copy(forwardRef.current)
-    stateRef.current.normal.copy(temps.normal)
-
-    meshRef.current.position.copy(positionRef.current)
-    temps.lookAt.copy(positionRef.current).addScaledVector(forwardRef.current, 2)
-    meshRef.current.lookAt(temps.lookAt)
   })
 
   return (
-    <mesh ref={meshRef}>
+    <mesh ref={meshRef} position={positionRef.current}>
       <capsuleGeometry args={[PLAYER_RADIUS, 0.3, 6, 12]} />
       <meshStandardMaterial color="#e9f2ff" roughness={0.4} />
-      <mesh ref={helperMeshRef} position={[0, -PLAYER_HEIGHT / 2 + 0.02, 0]}>
-        <cylinderGeometry args={[PLAYER_RADIUS, PLAYER_RADIUS, PLAYER_HEIGHT, 16]} />
-        <meshBasicMaterial color="#ff6b6b" wireframe={true} />
-      </mesh>
     </mesh>
   )
 }
@@ -366,7 +246,7 @@ function CameraRig({ mode, stateRef }: { mode: GeoSceneProps['cameraMode']; stat
   const orbitRef = useRef({
     azimuth: Math.PI / 4,
     polar: Math.PI / 3,
-    distance: PLANET_RADIUS * 2.4,
+    distance: 50,
     dragging: false,
     lastX: 0,
     lastY: 0,
@@ -457,28 +337,23 @@ function CameraRig({ mode, stateRef }: { mode: GeoSceneProps['cameraMode']; stat
 
 export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
   const playerStateRef = useRef<PlayerState>({
-    position: new Vector3(0, PLANET_RADIUS, 0),
+    position: new Vector3(0, 10, 0),
     forward: new Vector3(0, 0, -1),
     normal: new Vector3(0, 1, 0),
   })
 
   const [terrain, setTerrain] = useState(() => generatePlanet(seed))
 
-  const sunPosition = useMemo(() => {
-    const distance = PLANET_RADIUS * 3
-    const y = Math.sin(EARTH_AXIAL_TILT) * distance
-    const z = Math.cos(EARTH_AXIAL_TILT) * distance
-    return [distance, y, z] as const
-  }, [])
+  const sunPosition = [50, 20, 30] as const
 
   return (
-    <Canvas className="canvas" camera={{ position: [0, PLANET_RADIUS + 1.6, 0], fov: 62 }}>
+    <Canvas className="canvas" camera={{ position: [0, 12, 0], fov: 62 }}>
       <color attach="background" args={['#05070c']} />
       <ambientLight intensity={1.35} />
       <hemisphereLight intensity={0.85} color="#e6f1ff" groundColor="#24324f" />
       <directionalLight position={sunPosition} intensity={1.6} />
       <PlanetVoxels terrain={terrain} setTerrain={setTerrain} />
-      <Player seed={seed} stateRef={playerStateRef} terrain={terrain} />
+      <Player stateRef={playerStateRef} terrain={terrain} />
       <CameraRig mode={cameraMode} stateRef={playerStateRef} />
     </Canvas>
   )
