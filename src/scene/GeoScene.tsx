@@ -295,8 +295,8 @@ function Player({
 
     // Rotation from arrow keys
     const rotSpeed = 1.8 // radians per second
-    if (keys.current.rotateLeft) yawRef.current += rotSpeed * delta
-    if (keys.current.rotateRight) yawRef.current -= rotSpeed * delta
+    if (keys.current.rotateLeft) yawRef.current -= rotSpeed * delta
+    if (keys.current.rotateRight) yawRef.current += rotSpeed * delta
     if (keys.current.rotateUp) pitchRef.current = Math.min(0.8, pitchRef.current + rotSpeed * delta)
     if (keys.current.rotateDown) pitchRef.current = Math.max(-0.4, pitchRef.current - rotSpeed * delta)
 
