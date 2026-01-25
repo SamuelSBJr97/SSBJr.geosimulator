@@ -307,7 +307,7 @@ function Player({
     const move = new Vector3()
     if (keys.current.forward) move.add(forwardRef.current)
     if (keys.current.back) move.add(forwardRef.current.clone().negate())
-    const right = new Vector3(forwardRef.current.z, 0, -forwardRef.current.x).normalize()
+    const right = new Vector3(-forwardRef.current.z, 0, forwardRef.current.x).normalize()
     if (keys.current.left) move.add(right.clone().negate())
     if (keys.current.right) move.add(right)
 
