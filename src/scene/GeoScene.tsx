@@ -286,6 +286,8 @@ function Player({
   const helperMeshRef = useRef<Mesh>(null!)
   const keys = useKeyboard()
 
+  const { camera } = useThree()
+
   const positionRef = useRef<Vector3>(stateRef.current.position)
   const forwardRef = useRef<Vector3>(stateRef.current.forward)
   const yawRef = useRef<number>(0)
