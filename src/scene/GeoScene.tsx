@@ -3,7 +3,6 @@ import { useTexture } from '@react-three/drei'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Color, Matrix4, Vector3, InstancedMesh, Matrix3, Object3D } from 'three'
 import type { Mesh } from 'three'
-import * as RAPIER from '@dimforge/rapier3d-compat'
 
 export type GeoSceneProps = {
   seed: number
@@ -442,19 +441,51 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const rockNormal = useTexture(basePath + 'textures/Rock058_1K-JPG_NormalGL.jpg')
   const rockRoughness = useTexture(basePath + 'textures/Rock058_1K-JPG_Roughness.jpg')
 
-  // Rapier physics world for debris
-  const rapierRef = useRef<RAPIER.World | null>(null)
+  // Rapier physics world for debris (loaded dynamically to ensure WASM initialization)
+  const rapierRef = useRef<any | null>(null)
+  const rapierLibRef = useRef<any | null>(null)
   useEffect(() => {
-    rapierRef.current = new RAPIER.World({ x: 0, y: -9.81, z: 0 })
+    let mounted = true
+    ;(async () => {
+      try {
+        const R = await import('@dimforge/rapier3d-compat')
+        rapierLibRef.current = R
+        if (R.init) {
+          try {
+            await R.init()
+          } catch {}
+        }
+        if (!mounted) return
+        const world = new R.World({ x: 0, y: -9.81, z: 0 })
+        rapierRef.current = world
+
+        // initialize debris pool after world is ready
+        const DEBRIS_POOL = 24
+        const pool: Array<{ body: any; collider: any; active: boolean }> = []
+        for (let i = 0; i < DEBRIS_POOL; i++) {
+          const rb = world.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(0, -1000, 0))
+          const collider = world.createCollider(R.ColliderDesc.cuboid(0.1, 0.1, 0.1), rb)
+          pool.push({ body: rb, collider, active: false })
+        }
+        debrisPoolRef.current = pool
+        if (debrisMeshRef.current) debrisMeshRef.current.count = DEBRIS_POOL
+      } catch (e) {
+        // if rapier fails to load, leave physics disabled
+        rapierRef.current = null
+        rapierLibRef.current = null
+      }
+    })()
     return () => {
-      rapierRef.current = null
+      mounted = false
+      if (rapierRef.current) rapierRef.current = null
+      rapierLibRef.current = null
     }
   }, [])
 
   type Debris = {
     id: number
-    body: RAPIER.RigidBody | null
-    collider: RAPIER.Collider | null
+    body: any
+    collider: any
     pos: Vector3
     rot: Vector3
     size: number
@@ -468,7 +499,7 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const dirtInstRef = useRef<InstancedMesh | null>(null)
 
   // Debris pool (optimized for low-power devices)
-  const DEBRIS_POOL = 64
+  const DEBRIS_POOL = 24
   const debrisPoolRef = useRef<Array<{ body: RAPIER.RigidBody; collider: RAPIER.Collider; active: boolean }>>([])
   const poolNextRef = useRef(0)
 
@@ -479,7 +510,7 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
     const pool: Array<{ body: RAPIER.RigidBody; collider: RAPIER.Collider; active: boolean }> = []
     for (let i = 0; i < DEBRIS_POOL; i++) {
       const rb = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, -1000, 0))
-      const collider = world.createCollider(RAPIER.ColliderDesc.cuboid(0.125, 0.125, 0.125), rb)
+      const collider = world.createCollider(RAPIER.ColliderDesc.cuboid(0.1, 0.1, 0.1), rb)
       // reduce solver cost: small mass, default settings
       pool.push({ body: rb, collider, active: false })
     }
