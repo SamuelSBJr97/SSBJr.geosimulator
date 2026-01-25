@@ -441,10 +441,87 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const rockNormal = useTexture(basePath + 'textures/Rock058_1K-JPG_NormalGL.jpg')
   const rockRoughness = useTexture(basePath + 'textures/Rock058_1K-JPG_Roughness.jpg')
 
-  const removeVoxel = (index: number) => {
+  type Debris = {
+    id: number
+    pos: Vector3
+    vel: Vector3
+    rot: Vector3
+    aVel: Vector3
+    size: number
+    life: number
+  }
+
+  const [debris, setDebris] = useState<Debris[]>([])
+  const debrisRef = useRef<Debris[]>([])
+  const nextDebrisId = useRef(1)
+
+  // Simple physics update for debris
+  useFrame((_state, delta) => {
+    if (debrisRef.current.length === 0) return
+    const g = -9.81
+    for (let i = debrisRef.current.length - 1; i >= 0; i--) {
+      const d = debrisRef.current[i]
+      d.vel.y += g * delta
+      d.pos.addScaledVector(d.vel, delta)
+      d.rot.addScaledVector(d.aVel, delta)
+      d.life -= delta
+      if (d.pos.y < -20 || d.life <= 0) {
+        debrisRef.current.splice(i, 1)
+      }
+    }
+    setDebris([...debrisRef.current])
+  })
+
+  const handleRockClick = (index: number) => {
+    const origPos = terrain.positions[index]
+    // remove clicked voxel from terrain
     const newPositions = terrain.positions.filter((_, i) => i !== index)
     const newColors = terrain.colors.filter((_, i) => i !== index)
-    setTerrain({ ...terrain, positions: newPositions, colors: newColors })
+
+    // subdivide the voxel into small subcubes and remove a prism ~15%
+    const n = 4 // subdivisions per axis => 64 subcubes
+    const total = n * n * n
+    const target = Math.max(1, Math.floor(total * 0.15))
+    // choose prism dims roughly matching target
+    const pw = 2
+    const pl = 2
+    const ph = 3
+    const startX = Math.floor(Math.random() * (n - pw + 1))
+    const startZ = Math.floor(Math.random() * (n - pl + 1))
+    const startY = Math.floor(Math.random() * (n - ph + 1))
+
+    const subSize = VOXEL_SIZE / n
+    const half = VOXEL_SIZE / 2
+
+    const staticPositions: Vector3[] = []
+    const staticColors: Color[] = []
+
+    for (let ix = 0; ix < n; ix++) {
+      for (let iz = 0; iz < n; iz++) {
+        for (let iy = 0; iy < n; iy++) {
+          const inPrism = ix >= startX && ix < startX + pw && iz >= startZ && iz < startZ + pl && iy >= startY && iy < startY + ph
+          const cx = origPos.x + (ix / n - 0.5) * VOXEL_SIZE + subSize / 2
+          const cy = origPos.y + (iy / n - 0.5) * VOXEL_SIZE + subSize / 2
+          const cz = origPos.z + (iz / n - 0.5) * VOXEL_SIZE + subSize / 2
+
+          if (inPrism) {
+            // spawn debris piece
+            const id = nextDebrisId.current++
+            const vel = new Vector3((Math.random() - 0.5) * 3, 2 + Math.random() * 2, (Math.random() - 0.5) * 3)
+            const aVel = new Vector3((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5)
+            const d: Debris = { id, pos: new Vector3(cx, cy, cz), vel, rot: new Vector3(), aVel, size: subSize * 0.95, life: 6 }
+            debrisRef.current.push(d)
+          } else {
+            staticPositions.push(new Vector3(cx, cy, cz))
+            staticColors.push(COLORS.rock)
+          }
+        }
+      }
+    }
+
+    // update terrain with static subcubes replacing the original voxel
+    setTerrain({ ...terrain, positions: newPositions.concat(staticPositions), colors: newColors.concat(staticColors) })
+    setDebris([...debrisRef.current])
   }
 
   return (
@@ -454,7 +531,7 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
         const isDirt = color.equals(COLORS.dirt)
         const isRock = color.equals(COLORS.rock)
         return (
-          <mesh key={index} position={position} onClick={() => removeVoxel(index)}>
+          <mesh key={index} position={position} onClick={() => (isRock ? handleRockClick(index) : null)}>
             <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
             <meshStandardMaterial
               map={isDirt ? dirtColor : isRock ? rockColor : undefined}
@@ -467,6 +544,14 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
           </mesh>
         )
       })}
+
+      {/* debris meshes (temporary rigidbody pieces) */}
+      {debris.map((d) => (
+        <mesh key={`d-${d.id}`} position={d.pos.toArray()} rotation={d.rot.toArray()}>
+          <boxGeometry args={[d.size, d.size, d.size]} />
+          <meshStandardMaterial map={rockColor} normalMap={rockNormal} roughnessMap={rockRoughness} color={COLORS.rock} roughness={0.8} metalness={0} />
+        </mesh>
+      ))}
     </group>
   )
 }
