@@ -1,7 +1,7 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useTexture } from '@react-three/drei'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Color, Matrix4, Vector3, InstancedMesh, Matrix3, Object3D, Quaternion } from 'three'
+import { Color, Vector3, InstancedMesh, Object3D } from 'three'
 import type { Mesh } from 'three'
 
 export type GeoSceneProps = {
@@ -488,109 +488,8 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const rockNormal = useTexture(basePath + 'textures/Rock058_1K-JPG_NormalGL.jpg')
   const rockRoughness = useTexture(basePath + 'textures/Rock058_1K-JPG_Roughness.jpg')
 
-  // Physics worker (Rapier lives in the worker and is loaded only when needed)
-  const physWorkerRef = useRef<Worker | null>(null)
-  const debrisPositionsRef = useRef<Vector3[]>([])
-  const spawnQueueRef = useRef<Array<Array<{ x: number; y: number; z: number }>>>([])
-  const workerInitedRef = useRef(false)
-  const workerPrevPositionsRef = useRef<Vector3[]>([])
-  const workerNextPositionsRef = useRef<Vector3[]>([])
-  const workerPrevTimeRef = useRef<number>(0)
-  const workerNextTimeRef = useRef<number>(0)
-  const workerPrevQuatsRef = useRef<Quaternion[]>([])
-  const workerNextQuatsRef = useRef<Quaternion[]>([])
-  useEffect(() => {
-    return () => {
-      if (physWorkerRef.current) {
-        physWorkerRef.current.terminate()
-        physWorkerRef.current = null
-      }
-    }
-  }, [])
-
-  function ensureWorker() {
-    if (physWorkerRef.current) return
-    const worker = new Worker(new URL('./physics.worker.ts', import.meta.url), { type: 'module' })
-    physWorkerRef.current = worker
-    worker.onmessage = (ev) => {
-      const msg = ev.data
-      const now = performance.now()
-      if (msg.type === 'inited') {
-        workerInitedRef.current = true
-        // drain queue
-        while (spawnQueueRef.current.length > 0) {
-          const q = spawnQueueRef.current.shift()!
-          worker.postMessage({ type: 'spawn', positions: q })
-        }
-      } else if (msg.type === 'update') {
-        const arr = msg.positions || []
-        // shift next -> prev, store new next with timestamps for interpolation (positions + rotations)
-        workerPrevPositionsRef.current = workerNextPositionsRef.current.slice()
-        workerPrevQuatsRef.current = workerNextQuatsRef.current.slice()
-        workerPrevTimeRef.current = workerNextTimeRef.current || now
-        workerNextPositionsRef.current = arr.map((p: any) => new Vector3(p.x, p.y, p.z))
-        workerNextQuatsRef.current = arr.map((p: any) => {
-          if (p.q) return new Quaternion(p.q.x, p.q.y, p.q.z, p.q.w)
-          return new Quaternion(0, 0, 0, 1)
-        })
-        workerNextTimeRef.current = now
-      }
-    }
-    worker.postMessage({ type: 'init' })
-  }
-
-  type Debris = {
-    id: number
-    body: any
-    collider: any
-    pos: Vector3
-    rot: Vector3
-    size: number
-  }
-
-  const [debris, setDebris] = useState<Debris[]>([])
-  const debrisRef = useRef<Debris[]>([])
-  const nextDebrisId = useRef(1)
-  const debrisMeshRef = useRef<InstancedMesh | null>(null)
   const rockInstRef = useRef<InstancedMesh | null>(null)
   const dirtInstRef = useRef<InstancedMesh | null>(null)
-
-  // Debris pool size used for instanced mesh capacity
-  const DEBRIS_POOL = 12
-
-  // Update instanced debris transforms (worker drives physics)
-  useFrame((_state, _delta) => {
-    // Update instances for debris from worker positions
-    const positions = debrisPositionsRef.current
-    // Interpolate between worker prev/next positions for smooth visuals
-    const prev = workerPrevPositionsRef.current
-    const next = workerNextPositionsRef.current
-    const pTime = workerPrevTimeRef.current
-    const nTime = workerNextTimeRef.current
-    if (next.length > 0 && debrisMeshRef.current) {
-      const tmp = new Object3D()
-      const now = performance.now()
-      let t = 1
-      if (nTime > pTime) t = Math.max(0, Math.min(1, (now - pTime) / (nTime - pTime)))
-      const count = Math.min(next.length, DEBRIS_POOL)
-      for (let i = 0; i < count; i++) {
-        const aPos = prev[i] || next[i]
-        const bPos = next[i]
-        const interpPos = new Vector3().copy(aPos).lerp(bPos, t)
-
-        const aQuat = (workerPrevQuatsRef.current[i] || workerNextQuatsRef.current[i] || new Quaternion()).clone()
-        const bQuat = (workerNextQuatsRef.current[i] || new Quaternion()).clone()
-        const interpQuat = new Quaternion().slerpQuaternions(aQuat, bQuat, t)
-
-        tmp.position.copy(interpPos)
-        tmp.quaternion.copy(interpQuat)
-        tmp.updateMatrix()
-        debrisMeshRef.current.setMatrixAt(i, tmp.matrix)
-      }
-      debrisMeshRef.current.count = count
-      debrisMeshRef.current.instanceMatrix.needsUpdate = true
-    }
-  })
 
   // update static instanced meshes when terrain changes
   useEffect(() => {
@@ -667,7 +566,6 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
     const localArr = [local.x, local.y, local.z]
 
     const staticPositions: Vector3[] = []
-    const spawnPositions: Array<{ x: number; y: number; z: number }> = []
 
     for (let ix = 0; ix < n; ix++) {
       for (let iy = 0; iy < n; iy++) {
@@ -684,9 +582,6 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
           const inPrism = Math.abs(u - centerU) <= halfS && Math.abs(v - centerV) <= halfS
           if (!inPrism) {
             staticPositions.push(new Vector3(cx, cy, cz))
-          } else {
-            // collect spawn positions for worker; instant removal (no animation)
-            spawnPositions.push({ x: cx, y: cy, z: cz })
           }
         }
       }
@@ -726,11 +621,7 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
         <meshStandardMaterial map={dirtColor} normalMap={dirtNormal} roughnessMap={dirtRoughness} />
       </instancedMesh>
 
-      {/* Debris instanced mesh */}
-      <instancedMesh ref={debrisMeshRef} args={[undefined, undefined, DEBRIS_POOL]}> 
-        <boxGeometry args={[0.25, 0.25, 0.25]} />
-        <meshStandardMaterial map={rockColor} normalMap={rockNormal} roughnessMap={rockRoughness} roughness={0.8} metalness={0} />
-      </instancedMesh>
+      {/* debris removed: no spawned pieces */}
     </group>
   )
 }
