@@ -1,0 +1,45 @@
+name: Build and deploy docs with WASM
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build WASM (optional)
+        run: |
+          # If you have an AssemblyScript toolchain, you can compile here. This is kept optional.
+          if [ -f ./assembly/index.ts ]; then
+            npm install -g assemblyscript || true
+            asc assembly/index.ts -b public/wasm/interaction.wasm --optimize || true
+          fi
+        shell: bash
+
+      - name: Build site
+        run: npm run build
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
