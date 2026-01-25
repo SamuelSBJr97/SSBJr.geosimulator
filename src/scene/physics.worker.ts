@@ -29,12 +29,20 @@ function startLoop() {
     if (!world) return
     world.timestep = stepMs / 1000
     world.step()
-    const out: Array<{ x: number; y: number; z: number }> = []
+    const out: Array<{ x: number; y: number; z: number; q?: { x: number; y: number; z: number; w: number } }> = []
     for (let i = 0; i < pool.length; i++) {
       const p = pool[i]
       if (!p.active) continue
       const t = p.body.translation()
-      out.push({ x: t.x, y: t.y, z: t.z })
+      // attempt to read rotation quaternion
+      let q: any = null
+      try {
+        const r = p.body.rotation()
+        if (r) q = { x: r.x ?? 0, y: r.y ?? 0, z: r.z ?? 0, w: r.w ?? 1 }
+      } catch (e) {
+        q = { x: 0, y: 0, z: 0, w: 1 }
+      }
+      out.push({ x: t.x, y: t.y, z: t.z, q })
       // simple deactivation when far below
       if (t.y < -20) p.active = false
     }

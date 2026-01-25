@@ -1,7 +1,7 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useTexture } from '@react-three/drei'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Color, Matrix4, Vector3, InstancedMesh, Matrix3, Object3D } from 'three'
+import { Color, Matrix4, Vector3, InstancedMesh, Matrix3, Object3D, Quaternion } from 'three'
 import type { Mesh } from 'three'
 
 export type GeoSceneProps = {
@@ -450,6 +450,8 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const workerNextPositionsRef = useRef<Vector3[]>([])
   const workerPrevTimeRef = useRef<number>(0)
   const workerNextTimeRef = useRef<number>(0)
+  const workerPrevQuatsRef = useRef<Quaternion[]>([])
+  const workerNextQuatsRef = useRef<Quaternion[]>([])
   useEffect(() => {
     return () => {
       if (physWorkerRef.current) {
@@ -475,10 +477,15 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
         }
       } else if (msg.type === 'update') {
         const arr = msg.positions || []
-        // shift next -> prev, store new next with timestamps for interpolation
+        // shift next -> prev, store new next with timestamps for interpolation (positions + rotations)
         workerPrevPositionsRef.current = workerNextPositionsRef.current.slice()
+        workerPrevQuatsRef.current = workerNextQuatsRef.current.slice()
         workerPrevTimeRef.current = workerNextTimeRef.current || now
         workerNextPositionsRef.current = arr.map((p: any) => new Vector3(p.x, p.y, p.z))
+        workerNextQuatsRef.current = arr.map((p: any) => {
+          if (p.q) return new Quaternion(p.q.x, p.q.y, p.q.z, p.q.w)
+          return new Quaternion(0, 0, 0, 1)
+        })
         workerNextTimeRef.current = now
       }
     }
@@ -520,10 +527,16 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
       if (nTime > pTime) t = Math.max(0, Math.min(1, (now - pTime) / (nTime - pTime)))
       const count = Math.min(next.length, DEBRIS_POOL)
       for (let i = 0; i < count; i++) {
-        const a = prev[i] || next[i]
-        const b = next[i]
-        const interp = new Vector3().copy(a).lerp(b, t)
-        tmp.position.copy(interp)
+        const aPos = prev[i] || next[i]
+        const bPos = next[i]
+        const interpPos = new Vector3().copy(aPos).lerp(bPos, t)
+
+        const aQuat = (workerPrevQuatsRef.current[i] || workerNextQuatsRef.current[i] || new Quaternion()).clone()
+        const bQuat = (workerNextQuatsRef.current[i] || new Quaternion()).clone()
+        const interpQuat = new Quaternion().slerpQuaternions(aQuat, bQuat, t)
+
+        tmp.position.copy(interpPos)
+        tmp.quaternion.copy(interpQuat)
         tmp.updateMatrix()
         debrisMeshRef.current.setMatrixAt(i, tmp.matrix)
       }
