@@ -1,4 +1,5 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { useTexture } from '@react-three/drei'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Color, Matrix4, Vector3 } from 'three'
 import type { InstancedMesh, Mesh } from 'three'
@@ -94,6 +95,9 @@ function generatePlanet(seed: number): TerrainData {
 }
 
 function PlanetVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerrain: (t: TerrainData) => void }) {
+  const dirtTexture = useTexture('/textures/dirt.jpg')
+  const rockTexture = useTexture('/textures/rock.jpg')
+
   const removeVoxel = (index: number) => {
     const newPositions = terrain.positions.filter((_, i) => i !== index)
     const newColors = terrain.colors.filter((_, i) => i !== index)
@@ -102,12 +106,22 @@ function PlanetVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerrai
 
   return (
     <group>
-      {terrain.positions.map((position, index) => (
-        <mesh key={index} position={position} onClick={() => removeVoxel(index)}>
-          <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
-          <meshStandardMaterial color={terrain.colors[index]} roughness={0.9} metalness={0.05} />
-        </mesh>
-      ))}
+      {terrain.positions.map((position, index) => {
+        const color = terrain.colors[index]
+        const isDirt = color.equals(COLORS.dirt)
+        const isRock = color.equals(COLORS.rock)
+        return (
+          <mesh key={index} position={position} onClick={() => removeVoxel(index)}>
+            <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
+            <meshStandardMaterial
+              map={isDirt ? dirtTexture : isRock ? rockTexture : undefined}
+              color={color}
+              roughness={0.9}
+              metalness={0.05}
+            />
+          </mesh>
+        )
+      })}
     </group>
   )
 }
@@ -335,6 +349,38 @@ function CameraRig({ mode, stateRef }: { mode: GeoSceneProps['cameraMode']; stat
   return null
 }
 
+function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerrain: (t: TerrainData) => void }) {
+  const dirtTexture = useTexture('/textures/dirt.jpg')
+  const rockTexture = useTexture('/textures/rock.jpg')
+
+  const removeVoxel = (index: number) => {
+    const newPositions = terrain.positions.filter((_, i) => i !== index)
+    const newColors = terrain.colors.filter((_, i) => i !== index)
+    setTerrain({ ...terrain, positions: newPositions, colors: newColors })
+  }
+
+  return (
+    <group>
+      {terrain.positions.map((position, index) => {
+        const color = terrain.colors[index]
+        const isDirt = color.equals(COLORS.dirt)
+        const isRock = color.equals(COLORS.rock)
+        return (
+          <mesh key={index} position={position} onClick={() => removeVoxel(index)}>
+            <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
+            <meshStandardMaterial
+              map={isDirt ? dirtTexture : isRock ? rockTexture : undefined}
+              color={color}
+              roughness={0.9}
+              metalness={0.05}
+            />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
 export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
   const playerStateRef = useRef<PlayerState>({
     position: new Vector3(0, 10, 0),
@@ -352,7 +398,7 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
       <ambientLight intensity={1.35} />
       <hemisphereLight intensity={0.85} color="#e6f1ff" groundColor="#24324f" />
       <directionalLight position={sunPosition} intensity={1.6} />
-      <PlanetVoxels terrain={terrain} setTerrain={setTerrain} />
+      <TerrainVoxels terrain={terrain} setTerrain={setTerrain} />
       <Player stateRef={playerStateRef} terrain={terrain} />
       <CameraRig mode={cameraMode} stateRef={playerStateRef} />
     </Canvas>
