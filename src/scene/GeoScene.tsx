@@ -275,9 +275,11 @@ type PlayerState = {
 function Player({
   stateRef,
   terrain,
+  rockVoxels,
 }: {
   stateRef: React.MutableRefObject<PlayerState>
   terrain: TerrainData
+  rockVoxels: Set<string>
 }) {
   const meshRef = useRef<Mesh>(null!)
   const helperMeshRef = useRef<Mesh>(null!)
@@ -316,8 +318,53 @@ function Player({
       positionRef.current.add(move)
     }
 
-    // Keep player on flat surface
+    // Keep player on flat surface (tentative)
     positionRef.current.y = sampleSurfaceHeight(positionRef.current, terrain.heights) + PLAYER_HEIGHT
+
+    // Simple collision resolution against rock voxels (prevent walking through marble)
+    const radius = PLAYER_RADIUS
+    const halfVoxel = VOXEL_SIZE / 2
+    const px = positionRef.current.x
+    const pz = positionRef.current.z
+    const py = positionRef.current.y - PLAYER_HEIGHT // approximate feet y
+
+    const cellX = Math.round(px / VOXEL_SIZE)
+    const cellZ = Math.round(pz / VOXEL_SIZE)
+    const search = Math.ceil((radius + halfVoxel) / VOXEL_SIZE) + 1
+    for (let dx = -search; dx <= search; dx++) {
+      for (let dz = -search; dz <= search; dz++) {
+        for (let dy = -1; dy <= Math.ceil(PLAYER_HEIGHT / VOXEL_SIZE) + 1; dy++) {
+          const ix = cellX + dx
+          const iz = cellZ + dz
+          const iy = Math.round((py / VOXEL_SIZE)) + dy
+          const key = `${ix}|${iy}|${iz}`
+          if (!rockVoxels.has(key)) continue
+          const vx = ix * VOXEL_SIZE
+          const vy = iy * VOXEL_SIZE
+          const vz = iz * VOXEL_SIZE
+          const top = vy + halfVoxel
+          const bottom = vy - halfVoxel
+          // check vertical overlap: player's feet to head
+          const playerFeet = positionRef.current.y - PLAYER_HEIGHT
+          const playerHead = positionRef.current.y
+          if (playerHead < bottom || playerFeet > top + PLAYER_HEIGHT) continue
+
+          // horizontal push
+          const dxh = px - vx
+          const dzh = pz - vz
+          const dist = Math.sqrt(dxh * dxh + dzh * dzh)
+          const minDist = radius + halfVoxel
+          if (dist < 0.001) {
+            // nudge out on X axis
+            positionRef.current.x += (minDist)
+          } else if (dist < minDist) {
+            const push = (minDist - dist)
+            positionRef.current.x += (dxh / dist) * push
+            positionRef.current.z += (dzh / dist) * push
+          }
+        }
+      }
+    }
 
     // Camera follows player and looks in forward direction with pitch
     const lookAt = positionRef.current.clone().add(forwardRef.current.clone().setY(Math.tan(pitchRef.current)))
@@ -708,6 +755,20 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
 
   const [terrain, setTerrain] = useState(() => generatePlanet(seed))
 
+  // Build a fast lookup set of rock voxel grid keys for collision queries
+  const rockVoxelSet = useMemo(() => {
+    const s = new Set<string>()
+    for (let i = 0; i < terrain.positions.length; i++) {
+      if (!terrain.colors[i].equals(COLORS.rock)) continue
+      const p = terrain.positions[i]
+      const ix = Math.round(p.x / VOXEL_SIZE)
+      const iy = Math.round(p.y / VOXEL_SIZE)
+      const iz = Math.round(p.z / VOXEL_SIZE)
+      s.add(`${ix}|${iy}|${iz}`)
+    }
+    return s
+  }, [terrain.positions, terrain.colors])
+
   const sunPosition = [50, 20, 30] as const
 
   return (
@@ -717,7 +778,7 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
       <hemisphereLight intensity={0.85} color="#e6f1ff" groundColor="#24324f" />
       <directionalLight position={sunPosition} intensity={1.6} />
       <TerrainVoxels terrain={terrain} setTerrain={setTerrain} />
-      <Player stateRef={playerStateRef} terrain={terrain} />
+      <Player stateRef={playerStateRef} terrain={terrain} rockVoxels={rockVoxelSet} />
       <CameraRig mode={cameraMode} stateRef={playerStateRef} />
     </Canvas>
   )
