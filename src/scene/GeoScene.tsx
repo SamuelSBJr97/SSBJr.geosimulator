@@ -446,6 +446,10 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const debrisPositionsRef = useRef<Vector3[]>([])
   const spawnQueueRef = useRef<Array<Array<{ x: number; y: number; z: number }>>>([])
   const workerInitedRef = useRef(false)
+  const workerPrevPositionsRef = useRef<Vector3[]>([])
+  const workerNextPositionsRef = useRef<Vector3[]>([])
+  const workerPrevTimeRef = useRef<number>(0)
+  const workerNextTimeRef = useRef<number>(0)
   useEffect(() => {
     return () => {
       if (physWorkerRef.current) {
@@ -461,6 +465,7 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
     physWorkerRef.current = worker
     worker.onmessage = (ev) => {
       const msg = ev.data
+      const now = performance.now()
       if (msg.type === 'inited') {
         workerInitedRef.current = true
         // drain queue
@@ -470,7 +475,11 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
         }
       } else if (msg.type === 'update') {
         const arr = msg.positions || []
-        debrisPositionsRef.current = arr.map((p: any) => new Vector3(p.x, p.y, p.z))
+        // shift next -> prev, store new next with timestamps for interpolation
+        workerPrevPositionsRef.current = workerNextPositionsRef.current.slice()
+        workerPrevTimeRef.current = workerNextTimeRef.current || now
+        workerNextPositionsRef.current = arr.map((p: any) => new Vector3(p.x, p.y, p.z))
+        workerNextTimeRef.current = now
       }
     }
     worker.postMessage({ type: 'init' })
@@ -504,14 +513,26 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
 
     // Update instances for debris from worker positions
     const positions = debrisPositionsRef.current
-    if (positions.length > 0 && debrisMeshRef.current) {
+    // Interpolate between worker prev/next positions for smooth visuals
+    const prev = workerPrevPositionsRef.current
+    const next = workerNextPositionsRef.current
+    const pTime = workerPrevTimeRef.current
+    const nTime = workerNextTimeRef.current
+    if (next.length > 0 && debrisMeshRef.current) {
       const tmp = new Object3D()
-      for (let i = 0; i < positions.length && i < DEBRIS_POOL; i++) {
-        tmp.position.copy(positions[i])
+      const now = performance.now()
+      let t = 1
+      if (nTime > pTime) t = Math.max(0, Math.min(1, (now - pTime) / (nTime - pTime)))
+      const count = Math.min(next.length, DEBRIS_POOL)
+      for (let i = 0; i < count; i++) {
+        const a = prev[i] || next[i]
+        const b = next[i]
+        const interp = new Vector3().copy(a).lerp(b, t)
+        tmp.position.copy(interp)
         tmp.updateMatrix()
         debrisMeshRef.current.setMatrixAt(i, tmp.matrix)
       }
-      debrisMeshRef.current.count = Math.min(positions.length, DEBRIS_POOL)
+      debrisMeshRef.current.count = count
       debrisMeshRef.current.instanceMatrix.needsUpdate = true
     }
   })
