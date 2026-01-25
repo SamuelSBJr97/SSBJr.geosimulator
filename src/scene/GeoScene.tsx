@@ -467,6 +467,39 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const rockInstRef = useRef<InstancedMesh | null>(null)
   const dirtInstRef = useRef<InstancedMesh | null>(null)
 
+  // Debris pool (optimized for low-power devices)
+  const DEBRIS_POOL = 64
+  const debrisPoolRef = useRef<Array<{ body: RAPIER.RigidBody; collider: RAPIER.Collider; active: boolean }>>([])
+  const poolNextRef = useRef(0)
+
+  // initialize pool when world ready
+  useEffect(() => {
+    const world = rapierRef.current
+    if (!world) return
+    const pool: Array<{ body: RAPIER.RigidBody; collider: RAPIER.Collider; active: boolean }> = []
+    for (let i = 0; i < DEBRIS_POOL; i++) {
+      const rb = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, -1000, 0))
+      const collider = world.createCollider(RAPIER.ColliderDesc.cuboid(0.125, 0.125, 0.125), rb)
+      // reduce solver cost: small mass, default settings
+      pool.push({ body: rb, collider, active: false })
+    }
+    debrisPoolRef.current = pool
+    // set debris instanced mesh capacity
+    if (debrisMeshRef.current) debrisMeshRef.current.count = DEBRIS_POOL
+    return () => {
+      // destroy colliders/bodies if world is torn down
+      debrisPoolRef.current.forEach((p) => {
+        try {
+          world.removeCollider(p.collider)
+        } catch {}
+        try {
+          world.removeRigidBody(p.body)
+        } catch {}
+      })
+      debrisPoolRef.current = []
+    }
+  }, [rapierRef.current])
+
   // Physics step and update instanced debris transforms
   useFrame((_state, delta) => {
     const world = rapierRef.current
@@ -474,21 +507,25 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
     world.timestep = Math.min(delta, 1 / 30)
     world.step()
 
-    // Update instances for debris
-    if (debrisRef.current.length > 0 && debrisMeshRef.current) {
-      const temp = new Object3D()
-      debrisRef.current.forEach((d, i) => {
-        if (d.body) {
-          const rbPos = d.body.translation()
-          const rbRot = d.body.rotation()
-          temp.position.set(rbPos.x, rbPos.y, rbPos.z)
-          // Rapier rotation is quaternion; here using Euler fallback from rotation axis-angle
-          // For simplicity we ignore rotation conversion and set no rotation
-          temp.rotation.set(d.rot.x, d.rot.y, d.rot.z)
-          temp.updateMatrix()
-          debrisMeshRef.current!.setMatrixAt(i, temp.matrix)
+    // Update instances for debris from pooled rigidbodies
+    const pool = debrisPoolRef.current
+    if (pool.length > 0 && debrisMeshRef.current) {
+      const tmp = new Object3D()
+      let written = 0
+      for (let i = 0; i < pool.length; i++) {
+        const p = pool[i]
+        if (!p.active) continue
+        const t = p.body.translation()
+        // deactivate if fallen far below scene to free slot
+        if (t.y < -20) {
+          p.active = false
+          continue
         }
-      })
+        tmp.position.set(t.x, t.y, t.z)
+        tmp.updateMatrix()
+        debrisMeshRef.current.setMatrixAt(written++, tmp.matrix)
+      }
+      debrisMeshRef.current.count = written
       debrisMeshRef.current.instanceMatrix.needsUpdate = true
     }
   })
@@ -584,12 +621,45 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
           const inPrism = Math.abs(u - centerU) <= halfS && Math.abs(v - centerV) <= halfS
           if (!inPrism) {
             staticPositions.push(new Vector3(cx, cy, cz))
+          } else {
+            // spawn pooled rigidbody debris for this piece
+            const pool = debrisPoolRef.current
+            if (pool.length > 0) {
+              const idx = poolNextRef.current % pool.length
+              poolNextRef.current = (poolNextRef.current + 1) % pool.length
+              const item = pool[idx]
+              item.active = true
+              // position body and give small random impulse
+              try {
+                item.body.setTranslation({ x: cx, y: cy, z: cz }, true)
+                item.body.setLinvel({ x: (Math.random() - 0.5) * 1.5, y: 1.2 + Math.random() * 1.2, z: (Math.random() - 0.5) * 1.5 }, true)
+                item.body.setAngvel({ x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 2, z: (Math.random() - 0.5) * 2 }, true)
+              } catch (e) {
+                // ignore if body operations fail
+              }
+            }
           }
         }
       }
     }
 
     setTerrain({ ...terrain, positions: newPositions.concat(staticPositions), colors: newColors.concat(Array(staticPositions.length).fill(COLORS.rock)) })
+    // update debris instanced mesh count and matrices
+    const pool = debrisPoolRef.current
+    if (debrisMeshRef.current && pool.length > 0) {
+      const tmp = new Object3D()
+      let written = 0
+      for (let i = 0; i < pool.length; i++) {
+        const p = pool[i]
+        if (!p.active) continue
+        const t = p.body.translation()
+        tmp.position.set(t.x, t.y, t.z)
+        tmp.updateMatrix()
+        debrisMeshRef.current.setMatrixAt(written++, tmp.matrix)
+      }
+      debrisMeshRef.current.count = Math.max(0, written)
+      debrisMeshRef.current.instanceMatrix.needsUpdate = true
+    }
   }
 
   return (
@@ -622,7 +692,7 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
       </instancedMesh>
 
       {/* Debris instanced mesh */}
-      <instancedMesh ref={debrisMeshRef} args={[undefined, undefined, 256]}> 
+      <instancedMesh ref={debrisMeshRef} args={[undefined, undefined, DEBRIS_POOL]}> 
         <boxGeometry args={[0.25, 0.25, 0.25]} />
         <meshStandardMaterial map={rockColor} normalMap={rockNormal} roughnessMap={rockRoughness} roughness={0.8} metalness={0} />
       </instancedMesh>
