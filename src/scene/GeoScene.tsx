@@ -17,6 +17,8 @@ type TerrainData = {
 
 const PLANET_RADIUS = 4.8
 const VOXEL_SIZE = 1.0
+const SUBDIV_N = 4
+const SUBVOXEL_SIZE = VOXEL_SIZE / SUBDIV_N
 const WORLD_SIZE = 50
 const LAT_STEPS = 28
 const LON_STEPS = 52
@@ -57,8 +59,7 @@ function seededNoise(seed: number, i: number, j: number) {
 function generatePlanet(seed: number): TerrainData {
   const positions: Vector3[] = []
   const colors: Color[] = []
-  const heights = new Array<number>(WORLD_SIZE * WORLD_SIZE).fill(1)
-
+  const heights: number[] = new Array(WORLD_SIZE * WORLD_SIZE).fill(0)
   // Base rolling ground: mostly dirt with grassy tops
   for (let x = -WORLD_SIZE / 2; x < WORLD_SIZE / 2; x++) {
     for (let z = -WORLD_SIZE / 2; z < WORLD_SIZE / 2; z++) {
@@ -293,7 +294,9 @@ function Player({
   // helper cylinder is rendered as a child mesh in JSX below
 
   useFrame((state, delta) => {
-    const { camera } = state
+    // remove original voxel and add remaining small static pieces to subVoxels
+    setTerrain({ ...terrain, positions: newPositions, colors: newColors })
+    setSubVoxels((prev) => prev.concat(staticPositions))
 
     // Rotation from arrow keys
     const rotSpeed = 1.8 // radians per second
@@ -755,6 +758,9 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
 
   const [terrain, setTerrain] = useState(() => generatePlanet(seed))
 
+  // sub-voxel pieces created after drilling (static pieces)
+  const [subVoxels, setSubVoxels] = useState<Vector3[]>([])
+
   // Build a fast lookup set of rock voxel grid keys for collision queries
   const rockVoxelSet = useMemo(() => {
     const s = new Set<string>()
@@ -777,8 +783,8 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
       <ambientLight intensity={1.35} />
       <hemisphereLight intensity={0.85} color="#e6f1ff" groundColor="#24324f" />
       <directionalLight position={sunPosition} intensity={1.6} />
-      <TerrainVoxels terrain={terrain} setTerrain={setTerrain} />
-      <Player stateRef={playerStateRef} terrain={terrain} rockVoxels={rockVoxelSet} />
+      <TerrainVoxels terrain={terrain} setTerrain={setTerrain} subVoxels={subVoxels} setSubVoxels={setSubVoxels} />
+      <Player stateRef={playerStateRef} terrain={terrain} rockVoxels={rockVoxelSet} subVoxels={subVoxels} />
       <CameraRig mode={cameraMode} stateRef={playerStateRef} />
     </Canvas>
   )
