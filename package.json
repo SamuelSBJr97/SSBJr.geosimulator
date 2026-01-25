@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:wasm": "echo \"Compile your WASM with AssemblyScript or Rust and place the result at public/wasm/interaction.wasm\"",
     "preview": "vite preview",
     "lint": "eslint ."
   },
