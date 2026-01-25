@@ -504,13 +504,8 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   // Debris pool size used for instanced mesh capacity
   const DEBRIS_POOL = 12
 
-  // Physics step and update instanced debris transforms
-  useFrame((_state, delta) => {
-    const world = rapierRef.current
-    if (!world) return
-    world.timestep = Math.min(delta, 1 / 30)
-    world.step()
-
+  // Update instanced debris transforms (worker drives physics)
+  useFrame((_state, _delta) => {
     // Update instances for debris from worker positions
     const positions = debrisPositionsRef.current
     // Interpolate between worker prev/next positions for smooth visuals
