@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Color, Matrix4, Vector3 } from 'three'
 import type { InstancedMesh, Mesh } from 'three'
 
@@ -15,22 +15,24 @@ type TerrainData = {
 }
 
 const PLANET_RADIUS = 4.8
-const VOXEL_SIZE = 0.45
+const VOXEL_SIZE = 1.0
 const LAT_STEPS = 28
 const LON_STEPS = 52
 const EARTH_AXIAL_TILT = (23.44 * Math.PI) / 180
 const STEP_MAX = VOXEL_SIZE * 2.6
 const DECAL_IGNORE = VOXEL_SIZE * 0.6
-const PLAYER_RADIUS = 0.16
-const PLAYER_HEIGHT = 0.6
+const PLAYER_RADIUS = 0.3
+const PLAYER_HEIGHT = 1.7
 const GRAVITY_SPRING = 10
 const GRAVITY_DAMP = 4.5
 
 const COLORS = {
   ocean: new Color('#1c4fa1'),
-  rock: new Color('#7c6f64'),
+  rock: new Color('#f5f5f5'),
   lava: new Color('#ff5a3c'),
   sand: new Color('#c2a46b'),
+  grass: new Color('#4a7c59'),
+  snow: new Color('#ffffff'),
 }
 
 function mulberry32(seed: number) {
@@ -56,6 +58,7 @@ function generatePlanet(seed: number): TerrainData {
 
   for (let lat = 0; lat < LAT_STEPS; lat += 1) {
     const phi = (lat / (LAT_STEPS - 1)) * Math.PI
+    const biome = phi < Math.PI * 0.3 ? 'polar' : phi > Math.PI * 0.7 ? 'desert' : 'temperate'
 
     for (let lon = 0; lon < LON_STEPS; lon += 1) {
       const theta = (lon / LON_STEPS) * Math.PI * 2
@@ -69,16 +72,20 @@ function generatePlanet(seed: number): TerrainData {
 
       const isOcean = noise < 0.3
       const isLava = noise > 0.93
-      const height = isOcean ? 1 : Math.floor(1 + noise * 3)
+      const height = isOcean ? 1 : Math.floor(1 + noise * 10)
       heights[lat * LON_STEPS + lon] = height
 
       const baseColor = isOcean
         ? COLORS.ocean
         : isLava
           ? COLORS.lava
-          : noise > 0.75
-            ? COLORS.sand
-            : COLORS.rock
+          : biome === 'polar'
+            ? COLORS.snow
+            : biome === 'desert'
+              ? COLORS.sand
+              : noise > 0.8
+                ? COLORS.sand
+                : COLORS.rock
 
       for (let h = 0; h < height; h += 1) {
         const position = normal.clone().multiplyScalar(PLANET_RADIUS + h * VOXEL_SIZE)
@@ -91,31 +98,22 @@ function generatePlanet(seed: number): TerrainData {
   return { positions, colors, heights }
 }
 
-function PlanetVoxels({ terrain }: { terrain: TerrainData }) {
-  const instancedRef = useRef<InstancedMesh>(null!)
-  const { positions, colors } = terrain
-
-  useEffect(() => {
-    const mesh = instancedRef.current
-    const matrix = new Matrix4()
-
-    positions.forEach((position, index) => {
-      matrix.setPosition(position)
-      mesh.setMatrixAt(index, matrix)
-      mesh.setColorAt(index, colors[index])
-    })
-
-    mesh.instanceMatrix.needsUpdate = true
-    if (mesh.instanceColor) {
-      mesh.instanceColor.needsUpdate = true
-    }
-  }, [positions, colors])
+function PlanetVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerrain: (t: TerrainData) => void }) {
+  const removeVoxel = (index: number) => {
+    const newPositions = terrain.positions.filter((_, i) => i !== index)
+    const newColors = terrain.colors.filter((_, i) => i !== index)
+    setTerrain({ ...terrain, positions: newPositions, colors: newColors })
+  }
 
   return (
-    <instancedMesh ref={instancedRef} args={[undefined, undefined, positions.length]}>
-      <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
-      <meshStandardMaterial vertexColors roughness={0.9} metalness={0.05} />
-    </instancedMesh>
+    <group>
+      {terrain.positions.map((position, index) => (
+        <mesh key={index} position={position} onClick={() => removeVoxel(index)}>
+          <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
+          <meshStandardMaterial color={terrain.colors[index]} roughness={0.9} metalness={0.05} />
+        </mesh>
+      ))}
+    </group>
   )
 }
 
@@ -464,7 +462,7 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
     normal: new Vector3(0, 1, 0),
   })
 
-  const terrain = useMemo(() => generatePlanet(seed), [seed])
+  const [terrain, setTerrain] = useState(() => generatePlanet(seed))
 
   const sunPosition = useMemo(() => {
     const distance = PLANET_RADIUS * 3
@@ -479,7 +477,7 @@ export default function GeoScene({ seed, cameraMode }: GeoSceneProps) {
       <ambientLight intensity={1.35} />
       <hemisphereLight intensity={0.85} color="#e6f1ff" groundColor="#24324f" />
       <directionalLight position={sunPosition} intensity={1.6} />
-      <PlanetVoxels terrain={terrain} />
+      <PlanetVoxels terrain={terrain} setTerrain={setTerrain} />
       <Player seed={seed} stateRef={playerStateRef} terrain={terrain} />
       <CameraRig mode={cameraMode} stateRef={playerStateRef} />
     </Canvas>
