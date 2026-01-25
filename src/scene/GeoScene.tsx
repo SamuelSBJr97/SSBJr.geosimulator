@@ -59,10 +59,11 @@ function generatePlanet(seed: number): TerrainData {
   const colors: Color[] = []
   const heights = new Array<number>(WORLD_SIZE * WORLD_SIZE).fill(1)
 
+  // Base rolling ground: mostly dirt with grassy tops
   for (let x = -WORLD_SIZE / 2; x < WORLD_SIZE / 2; x++) {
     for (let z = -WORLD_SIZE / 2; z < WORLD_SIZE / 2; z++) {
       const noise = seededNoise(seed, x, z)
-      const height = Math.floor(1 + noise * 5)
+      const height = Math.max(1, Math.floor(1 + noise * 2.5)) // gentle variation
       const index = (x + WORLD_SIZE / 2) * WORLD_SIZE + (z + WORLD_SIZE / 2)
       heights[index] = height
 
@@ -73,18 +74,60 @@ function generatePlanet(seed: number): TerrainData {
     }
   }
 
-  // Add some marble stones
-  for (let i = 0; i < 20; i++) {
-    const x = Math.floor(Math.random() * WORLD_SIZE) - WORLD_SIZE / 2
-    const z = Math.floor(Math.random() * WORLD_SIZE) - WORLD_SIZE / 2
-    const index = (x + WORLD_SIZE / 2) * WORLD_SIZE + (z + WORLD_SIZE / 2)
-    const height = heights[index]
+  // Create several marble-quarry style rectangular blocks and carved pits
+  const rng = mulberry32(seed + 12345)
+  const numQuarries = 3 + Math.floor(rng() * 3) // 3-5 quarries
 
-    // Place a 2x2x2 marble block
-    for (let dx = 0; dx < 2; dx++) {
-      for (let dy = 0; dy < 2; dy++) {
-        for (let dz = 0; dz < 2; dz++) {
-          positions.push(new Vector3((x + dx) * VOXEL_SIZE, (height + dy) * VOXEL_SIZE, (z + dz) * VOXEL_SIZE))
+  for (let q = 0; q < numQuarries; q++) {
+    const w = 6 + Math.floor(rng() * 10) // width 6-15
+    const l = 6 + Math.floor(rng() * 10) // length
+    const h = 3 + Math.floor(rng() * 6) // height 3-8
+
+    const cx = Math.floor(rng() * (WORLD_SIZE - w)) - WORLD_SIZE / 2
+    const cz = Math.floor(rng() * (WORLD_SIZE - l)) - WORLD_SIZE / 2
+
+    // Carve a pit by lowering ground heights inside footprint (stepped terraces)
+    for (let dx = 0; dx < w; dx++) {
+      for (let dz = 0; dz < l; dz++) {
+        const gx = cx + dx
+        const gz = cz + dz
+        if (gx < -WORLD_SIZE / 2 || gx >= WORLD_SIZE / 2 || gz < -WORLD_SIZE / 2 || gz >= WORLD_SIZE / 2) continue
+        const idx = (gx + WORLD_SIZE / 2) * WORLD_SIZE + (gz + WORLD_SIZE / 2)
+        // lower height to create pit base (leave some steps)
+        heights[idx] = Math.max(0, (heights[idx] || 1) - (Math.floor(h / 2) + Math.floor(rng() * 2)))
+      }
+    }
+
+    // Place large rectangular marble blocks (exposed faces)
+    for (let dx = 0; dx < w; dx++) {
+      for (let dz = 0; dz < l; dz++) {
+        const gx = cx + dx
+        const gz = cz + dz
+        if (gx < -WORLD_SIZE / 2 || gx >= WORLD_SIZE / 2 || gz < -WORLD_SIZE / 2 || gz >= WORLD_SIZE / 2) continue
+        const idx = (gx + WORLD_SIZE / 2) * WORLD_SIZE + (gz + WORLD_SIZE / 2)
+        const baseH = Math.max(0, heights[idx] || 0)
+        // Build vertical cut blocks along the quarry walls: stack rock blocks up to h
+        for (let by = 0; by < h; by++) {
+          positions.push(new Vector3(gx * VOXEL_SIZE, (baseH + by) * VOXEL_SIZE, gz * VOXEL_SIZE))
+          colors.push(COLORS.rock)
+        }
+      }
+    }
+  }
+
+  // Add some isolated marble blocks for variety
+  for (let i = 0; i < 8; i++) {
+    const x = Math.floor(Math.random() * (WORLD_SIZE - 4)) - WORLD_SIZE / 2
+    const z = Math.floor(Math.random() * (WORLD_SIZE - 4)) - WORLD_SIZE / 2
+    const baseIdx = (x + WORLD_SIZE / 2) * WORLD_SIZE + (z + WORLD_SIZE / 2)
+    const baseH = Math.max(0, heights[baseIdx] || 0)
+    const bw = 3
+    const bl = 3
+    const bh = 3
+    for (let dx = 0; dx < bw; dx++) {
+      for (let dz = 0; dz < bl; dz++) {
+        for (let dy = 0; dy < bh; dy++) {
+          positions.push(new Vector3((x + dx) * VOXEL_SIZE, (baseH + dy) * VOXEL_SIZE, (z + dz) * VOXEL_SIZE))
           colors.push(COLORS.rock)
         }
       }
