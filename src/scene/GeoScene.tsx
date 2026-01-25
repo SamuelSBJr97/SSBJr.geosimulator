@@ -479,7 +479,7 @@ function CameraRig({ mode, stateRef }: { mode: GeoSceneProps['cameraMode']; stat
   return null
 }
 
-function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerrain: (t: TerrainData) => void }) {
+function TerrainVoxels({ terrain, setTerrain, subVoxels, setSubVoxels }: { terrain: TerrainData; setTerrain: (t: TerrainData) => void; subVoxels: Vector3[]; setSubVoxels: (s: Vector3[]) => void }) {
   const basePath = '/SSBJr.geosimulator/'
 
   const dirtColor = useTexture(basePath + 'textures/Ground086_1K-JPG_Color.jpg')
@@ -492,8 +492,9 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
 
   const rockInstRef = useRef<InstancedMesh | null>(null)
   const dirtInstRef = useRef<InstancedMesh | null>(null)
+  const subInstRef = useRef<InstancedMesh | null>(null)
 
-  // update static instanced meshes when terrain changes
+  // update static instanced meshes when terrain or subVoxels change
   useEffect(() => {
     const rockMesh = rockInstRef.current
     const dirtMesh = dirtInstRef.current
@@ -524,7 +525,20 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
       dirtMesh.setMatrixAt(i, tmp.matrix)
     }
     dirtMesh.instanceMatrix.needsUpdate = true
-  }, [terrain.positions, terrain.colors])
+
+    // update sub-voxel instances
+    const subMesh = subInstRef.current
+    if (subMesh) {
+      const tmp2 = new Object3D()
+      subMesh.count = subVoxels.length
+      for (let i = 0; i < subVoxels.length; i++) {
+        tmp2.position.copy(subVoxels[i])
+        tmp2.updateMatrix()
+        subMesh.setMatrixAt(i, tmp2.matrix)
+      }
+      subMesh.instanceMatrix.needsUpdate = true
+    }
+  }, [terrain.positions, terrain.colors, subVoxels])
 
   const handleRockClick = (index: number, faceNormal: Vector3 | null = null, clickPoint: Vector3 | null = null) => {
     const origPos = terrain.positions[index]
@@ -589,9 +603,9 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
       }
     }
 
-    setTerrain({ ...terrain, positions: newPositions.concat(staticPositions), colors: newColors.concat(Array(staticPositions.length).fill(COLORS.rock)) })
-    // send spawn positions to worker (create worker lazily)
-    // We do not spawn debris physics — simply remove the prism section
+    // Replace the clicked full voxel with the remaining sub-voxels stored separately
+    setTerrain({ ...terrain, positions: newPositions, colors: newColors })
+    setSubVoxels((prev) => prev.concat(staticPositions))
   }
 
   return (
@@ -623,7 +637,11 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
         <meshStandardMaterial map={dirtColor} normalMap={dirtNormal} roughnessMap={dirtRoughness} />
       </instancedMesh>
 
-      {/* debris removed: no spawned pieces */}
+      {/* sub-voxel static pieces (smaller than VOXEL_SIZE) */}
+      <instancedMesh ref={subInstRef} args={[undefined, undefined, Math.max(1, subVoxels.length)]}>
+        <boxGeometry args={[SUBVOXEL_SIZE, SUBVOXEL_SIZE, SUBVOXEL_SIZE]} />
+        <meshStandardMaterial map={rockColor} normalMap={rockNormal} roughnessMap={rockRoughness} />
+      </instancedMesh>
     </group>
   )
 }
