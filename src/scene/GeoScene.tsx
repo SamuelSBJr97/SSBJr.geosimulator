@@ -1,8 +1,9 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useTexture } from '@react-three/drei'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Color, Matrix4, Vector3 } from 'three'
-import type { InstancedMesh, Mesh } from 'three'
+import { Color, Matrix4, Vector3, InstancedMesh, Matrix3, Object3D } from 'three'
+import type { Mesh } from 'three'
+import * as RAPIER from '@dimforge/rapier3d-compat'
 
 export type GeoSceneProps = {
   seed: number
@@ -441,117 +442,190 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
   const rockNormal = useTexture(basePath + 'textures/Rock058_1K-JPG_NormalGL.jpg')
   const rockRoughness = useTexture(basePath + 'textures/Rock058_1K-JPG_Roughness.jpg')
 
+  // Rapier physics world for debris
+  const rapierRef = useRef<RAPIER.World | null>(null)
+  useEffect(() => {
+    rapierRef.current = new RAPIER.World({ x: 0, y: -9.81, z: 0 })
+    return () => {
+      rapierRef.current = null
+    }
+  }, [])
+
   type Debris = {
     id: number
+    body: RAPIER.RigidBody | null
+    collider: RAPIER.Collider | null
     pos: Vector3
-    vel: Vector3
     rot: Vector3
-    aVel: Vector3
     size: number
-    life: number
   }
 
   const [debris, setDebris] = useState<Debris[]>([])
   const debrisRef = useRef<Debris[]>([])
   const nextDebrisId = useRef(1)
+  const debrisMeshRef = useRef<InstancedMesh | null>(null)
+  const rockInstRef = useRef<InstancedMesh | null>(null)
+  const dirtInstRef = useRef<InstancedMesh | null>(null)
 
-  // Simple physics update for debris
+  // Physics step and update instanced debris transforms
   useFrame((_state, delta) => {
-    if (debrisRef.current.length === 0) return
-    const g = -9.81
-    for (let i = debrisRef.current.length - 1; i >= 0; i--) {
-      const d = debrisRef.current[i]
-      d.vel.y += g * delta
-      d.pos.addScaledVector(d.vel, delta)
-      d.rot.addScaledVector(d.aVel, delta)
-      d.life -= delta
-      if (d.pos.y < -20 || d.life <= 0) {
-        debrisRef.current.splice(i, 1)
-      }
+    const world = rapierRef.current
+    if (!world) return
+    world.timestep = Math.min(delta, 1 / 30)
+    world.step()
+
+    // Update instances for debris
+    if (debrisRef.current.length > 0 && debrisMeshRef.current) {
+      const temp = new Object3D()
+      debrisRef.current.forEach((d, i) => {
+        if (d.body) {
+          const rbPos = d.body.translation()
+          const rbRot = d.body.rotation()
+          temp.position.set(rbPos.x, rbPos.y, rbPos.z)
+          // Rapier rotation is quaternion; here using Euler fallback from rotation axis-angle
+          // For simplicity we ignore rotation conversion and set no rotation
+          temp.rotation.set(d.rot.x, d.rot.y, d.rot.z)
+          temp.updateMatrix()
+          debrisMeshRef.current!.setMatrixAt(i, temp.matrix)
+        }
+      })
+      debrisMeshRef.current.instanceMatrix.needsUpdate = true
     }
-    setDebris([...debrisRef.current])
   })
 
-  const handleRockClick = (index: number) => {
+  // update static instanced meshes when terrain changes
+  useEffect(() => {
+    const rockMesh = rockInstRef.current
+    const dirtMesh = dirtInstRef.current
+    if (!rockMesh || !dirtMesh) return
+
+    const rockPositions: Vector3[] = []
+    const dirtPositions: Vector3[] = []
+    for (let i = 0; i < terrain.positions.length; i++) {
+      const p = terrain.positions[i]
+      const c = terrain.colors[i]
+      if (c.equals(COLORS.rock)) rockPositions.push(p)
+      else dirtPositions.push(p)
+    }
+
+    const tmp = new Object3D()
+    rockMesh.count = rockPositions.length
+    for (let i = 0; i < rockPositions.length; i++) {
+      tmp.position.copy(rockPositions[i])
+      tmp.updateMatrix()
+      rockMesh.setMatrixAt(i, tmp.matrix)
+    }
+    rockMesh.instanceMatrix.needsUpdate = true
+
+    dirtMesh.count = dirtPositions.length
+    for (let i = 0; i < dirtPositions.length; i++) {
+      tmp.position.copy(dirtPositions[i])
+      tmp.updateMatrix()
+      dirtMesh.setMatrixAt(i, tmp.matrix)
+    }
+    dirtMesh.instanceMatrix.needsUpdate = true
+  }, [terrain.positions, terrain.colors])
+
+  const handleRockClick = (index: number, faceNormal: Vector3 | null = null, clickPoint: Vector3 | null = null) => {
     const origPos = terrain.positions[index]
     // remove clicked voxel from terrain
     const newPositions = terrain.positions.filter((_, i) => i !== index)
     const newColors = terrain.colors.filter((_, i) => i !== index)
 
-    // subdivide the voxel into small subcubes and remove a prism ~15%
-    const n = 4 // subdivisions per axis => 64 subcubes
-    const total = n * n * n
-    const target = Math.max(1, Math.floor(total * 0.15))
-    // choose prism dims roughly matching target
-    const pw = 2
-    const pl = 2
-    const ph = 3
-    const startX = Math.floor(Math.random() * (n - pw + 1))
-    const startZ = Math.floor(Math.random() * (n - pl + 1))
-    const startY = Math.floor(Math.random() * (n - ph + 1))
-
+    // Subdivide voxel and create prism along faceNormal axis; if faceNormal is null, choose random axis
+    const n = 4
     const subSize = VOXEL_SIZE / n
+
+    // Determine axis (0=x,1=y,2=z) from faceNormal
+    let axis = 1
+    if (faceNormal) {
+      const abs = new Vector3(Math.abs(faceNormal.x), Math.abs(faceNormal.y), Math.abs(faceNormal.z))
+      axis = abs.x > abs.y && abs.x > abs.z ? 0 : abs.z > abs.y ? 2 : 1
+    } else {
+      axis = Math.floor(Math.random() * 3)
+    }
+
+    // Prism: square base on the clicked face with 15% area, centered at click point
+    if (!faceNormal || !clickPoint) return
+    const face = faceNormal.clone()
+    // Determine axis (0=x,1=y,2=z)
+    const abs = new Vector3(Math.abs(face.x), Math.abs(face.y), Math.abs(face.z))
+    const axisLocal = abs.x > abs.y && abs.x > abs.z ? 0 : abs.z > abs.y ? 2 : 1
+
+    // compute local center of click relative to voxel center in -half..half
+    const local = new Vector3(clickPoint.x - origPos.x, clickPoint.y - origPos.y, clickPoint.z - origPos.z)
     const half = VOXEL_SIZE / 2
 
+    // side length of square base on face
+    const s = Math.sqrt(0.15) * VOXEL_SIZE
+    const halfS = s / 2
+
+    // pick the two axes that form the face plane
+    const axisU = (axisLocal + 1) % 3
+    const axisV = (axisLocal + 2) % 3
+
+    // map local vector to array for easy access
+    const localArr = [local.x, local.y, local.z]
+
     const staticPositions: Vector3[] = []
-    const staticColors: Color[] = []
 
     for (let ix = 0; ix < n; ix++) {
-      for (let iz = 0; iz < n; iz++) {
-        for (let iy = 0; iy < n; iy++) {
-          const inPrism = ix >= startX && ix < startX + pw && iz >= startZ && iz < startZ + pl && iy >= startY && iy < startY + ph
-          const cx = origPos.x + (ix / n - 0.5) * VOXEL_SIZE + subSize / 2
-          const cy = origPos.y + (iy / n - 0.5) * VOXEL_SIZE + subSize / 2
-          const cz = origPos.z + (iz / n - 0.5) * VOXEL_SIZE + subSize / 2
-
-          if (inPrism) {
-            // spawn debris piece
-            const id = nextDebrisId.current++
-            const vel = new Vector3((Math.random() - 0.5) * 3, 2 + Math.random() * 2, (Math.random() - 0.5) * 3)
-            const aVel = new Vector3((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 5)
-            const d: Debris = { id, pos: new Vector3(cx, cy, cz), vel, rot: new Vector3(), aVel, size: subSize * 0.95, life: 6 }
-            debrisRef.current.push(d)
-          } else {
+      for (let iy = 0; iy < n; iy++) {
+        for (let iz = 0; iz < n; iz++) {
+          const coords = [ix, iy, iz]
+          const cx = origPos.x + ((ix + 0.5) / n - 0.5) * VOXEL_SIZE
+          const cy = origPos.y + ((iy + 0.5) / n - 0.5) * VOXEL_SIZE
+          const cz = origPos.z + ((iz + 0.5) / n - 0.5) * VOXEL_SIZE
+          const centerLocal = [cx - origPos.x, cy - origPos.y, cz - origPos.z]
+          const u = centerLocal[axisU]
+          const v = centerLocal[axisV]
+          const centerU = localArr[axisU]
+          const centerV = localArr[axisV]
+          const inPrism = Math.abs(u - centerU) <= halfS && Math.abs(v - centerV) <= halfS
+          if (!inPrism) {
             staticPositions.push(new Vector3(cx, cy, cz))
-            staticColors.push(COLORS.rock)
           }
         }
       }
     }
 
-    // update terrain with static subcubes replacing the original voxel
-    setTerrain({ ...terrain, positions: newPositions.concat(staticPositions), colors: newColors.concat(staticColors) })
-    setDebris([...debrisRef.current])
+    setTerrain({ ...terrain, positions: newPositions.concat(staticPositions), colors: newColors.concat(Array(staticPositions.length).fill(COLORS.rock)) })
   }
 
   return (
     <group>
-      {terrain.positions.map((position, index) => {
-        const color = terrain.colors[index]
-        const isDirt = color.equals(COLORS.dirt)
-        const isRock = color.equals(COLORS.rock)
-        return (
-          <mesh key={index} position={position} onClick={() => (isRock ? handleRockClick(index) : null)}>
-            <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
-            <meshStandardMaterial
-              map={isDirt ? dirtColor : isRock ? rockColor : undefined}
-              normalMap={isDirt ? dirtNormal : isRock ? rockNormal : undefined}
-              roughnessMap={isDirt ? dirtRoughness : isRock ? rockRoughness : undefined}
-              color={color}
-              roughness={1}
-              metalness={0}
-            />
-          </mesh>
-        )
-      })}
+      {/* Static terrain instanced meshes: rock and dirt */}
+      <instancedMesh
+        ref={rockInstRef}
+        args={[undefined, undefined, Math.max(1, terrain.positions.length)]}
+        onPointerDown={(e) => {
+          e.stopPropagation()
+          const id = (e as any).instanceId
+          if (id == null) return
+          // map instance id -> terrain index of rock
+          const rockIndices: number[] = []
+          for (let i = 0; i < terrain.positions.length; i++) if (terrain.colors[i].equals(COLORS.rock)) rockIndices.push(i)
+          const terrainIndex = rockIndices[id]
+          if (terrainIndex == null) return
+          const faceN = e.face ? new Vector3(e.face.normal.x, e.face.normal.y, e.face.normal.z) : null
+          const clickP = e.point ? new Vector3(e.point.x, e.point.y, e.point.z) : null
+          handleRockClick(terrainIndex, faceN, clickP)
+        }}
+      >
+        <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
+        <meshStandardMaterial map={rockColor} normalMap={rockNormal} roughnessMap={rockRoughness} />
+      </instancedMesh>
 
-      {/* debris meshes (temporary rigidbody pieces) */}
-      {debris.map((d) => (
-        <mesh key={`d-${d.id}`} position={d.pos.toArray()} rotation={d.rot.toArray()}>
-          <boxGeometry args={[d.size, d.size, d.size]} />
-          <meshStandardMaterial map={rockColor} normalMap={rockNormal} roughnessMap={rockRoughness} color={COLORS.rock} roughness={0.8} metalness={0} />
-        </mesh>
-      ))}
+      <instancedMesh ref={dirtInstRef} args={[undefined, undefined, Math.max(1, terrain.positions.length)]}>
+        <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
+        <meshStandardMaterial map={dirtColor} normalMap={dirtNormal} roughnessMap={dirtRoughness} />
+      </instancedMesh>
+
+      {/* Debris instanced mesh */}
+      <instancedMesh ref={debrisMeshRef} args={[undefined, undefined, 256]}> 
+        <boxGeometry args={[0.25, 0.25, 0.25]} />
+        <meshStandardMaterial map={rockColor} normalMap={rockNormal} roughnessMap={rockRoughness} roughness={0.8} metalness={0} />
+      </instancedMesh>
     </group>
   )
 }
