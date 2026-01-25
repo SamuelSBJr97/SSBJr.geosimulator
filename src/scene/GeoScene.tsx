@@ -350,13 +350,15 @@ function CameraRig({ mode, stateRef }: { mode: GeoSceneProps['cameraMode']; stat
 }
 
 function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerrain: (t: TerrainData) => void }) {
-  const dirtColor = useTexture('/textures/Ground086_1K-JPG_Color.jpg')
-  const dirtNormal = useTexture('/textures/Ground086_1K-JPG_NormalGL.jpg')
-  const dirtRoughness = useTexture('/textures/Ground086_1K-JPG_Roughness.jpg')
+  const basePath = '/SSBJr.geosimulator/'
 
-  const rockColor = useTexture('/textures/Rock058_1K-JPG_Color.jpg')
-  const rockNormal = useTexture('/textures/Rock058_1K-JPG_NormalGL.jpg')
-  const rockRoughness = useTexture('/textures/Rock058_1K-JPG_Roughness.jpg')
+  const dirtColor = useTexture(basePath + 'textures/Ground086_1K-JPG_Color.jpg')
+  const dirtNormal = useTexture(basePath + 'textures/Ground086_1K-JPG_NormalGL.jpg')
+  const dirtRoughness = useTexture(basePath + 'textures/Ground086_1K-JPG_Roughness.jpg')
+
+  const rockColor = useTexture(basePath + 'textures/Rock058_1K-JPG_Color.jpg')
+  const rockNormal = useTexture(basePath + 'textures/Rock058_1K-JPG_NormalGL.jpg')
+  const rockRoughness = useTexture(basePath + 'textures/Rock058_1K-JPG_Roughness.jpg')
 
   const removeVoxel = (index: number) => {
     const newPositions = terrain.positions.filter((_, i) => i !== index)
