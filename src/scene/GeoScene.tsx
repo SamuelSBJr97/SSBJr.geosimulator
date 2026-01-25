@@ -350,8 +350,13 @@ function CameraRig({ mode, stateRef }: { mode: GeoSceneProps['cameraMode']; stat
 }
 
 function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerrain: (t: TerrainData) => void }) {
-  const dirtTexture = useTexture('/textures/dirt.jpg')
-  const rockTexture = useTexture('/textures/rock.jpg')
+  const dirtColor = useTexture('/textures/Ground086_1K-JPG_Color.jpg')
+  const dirtNormal = useTexture('/textures/Ground086_1K-JPG_NormalGL.jpg')
+  const dirtRoughness = useTexture('/textures/Ground086_1K-JPG_Roughness.jpg')
+
+  const rockColor = useTexture('/textures/Rock058_1K-JPG_Color.jpg')
+  const rockNormal = useTexture('/textures/Rock058_1K-JPG_NormalGL.jpg')
+  const rockRoughness = useTexture('/textures/Rock058_1K-JPG_Roughness.jpg')
 
   const removeVoxel = (index: number) => {
     const newPositions = terrain.positions.filter((_, i) => i !== index)
@@ -369,10 +374,12 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
           <mesh key={index} position={position} onClick={() => removeVoxel(index)}>
             <boxGeometry args={[VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE]} />
             <meshStandardMaterial
-              map={isDirt ? dirtTexture : isRock ? rockTexture : undefined}
+              map={isDirt ? dirtColor : isRock ? rockColor : undefined}
+              normalMap={isDirt ? dirtNormal : isRock ? rockNormal : undefined}
+              roughnessMap={isDirt ? dirtRoughness : isRock ? rockRoughness : undefined}
               color={color}
-              roughness={0.9}
-              metalness={0.05}
+              roughness={1}
+              metalness={0}
             />
           </mesh>
         )
