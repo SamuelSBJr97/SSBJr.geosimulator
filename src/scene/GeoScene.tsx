@@ -294,9 +294,6 @@ function Player({
   // helper cylinder is rendered as a child mesh in JSX below
 
   useFrame((state, delta) => {
-    // remove original voxel and add remaining small static pieces to subVoxels
-    setTerrain({ ...terrain, positions: newPositions, colors: newColors })
-    setSubVoxels((prev) => prev.concat(staticPositions))
 
     // Rotation from arrow keys
     const rotSpeed = 1.8 // radians per second
@@ -697,18 +694,7 @@ function TerrainVoxels({ terrain, setTerrain }: { terrain: TerrainData; setTerra
 
     setTerrain({ ...terrain, positions: newPositions.concat(staticPositions), colors: newColors.concat(Array(staticPositions.length).fill(COLORS.rock)) })
     // send spawn positions to worker (create worker lazily)
-    if (spawnPositions.length > 0) {
-      ensureWorker()
-      if (physWorkerRef.current) {
-        if (workerInitedRef.current) {
-          physWorkerRef.current.postMessage({ type: 'spawn', positions: spawnPositions })
-        } else {
-          spawnQueueRef.current.push(spawnPositions)
-        }
-      }
-      // reflect immediate positions for visual feedback until worker steps
-      debrisPositionsRef.current = spawnPositions.map((p) => new Vector3(p.x, p.y, p.z))
-    }
+    // We do not spawn debris physics — simply remove the prism section
   }
 
   return (
