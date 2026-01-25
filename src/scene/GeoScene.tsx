@@ -69,7 +69,8 @@ function generatePlanet(seed: number): TerrainData {
 
       for (let y = 0; y < height; y++) {
         positions.push(new Vector3(x * VOXEL_SIZE, y * VOXEL_SIZE, z * VOXEL_SIZE))
-        colors.push(y === height - 1 ? COLORS.grass : COLORS.dirt)
+        // flat ground is dirt only
+        colors.push(COLORS.dirt)
       }
     }
   }
@@ -175,26 +176,38 @@ function useKeyboard() {
     back: false,
     left: false,
     right: false,
+    rotateLeft: false,
+    rotateRight: false,
+    rotateUp: false,
+    rotateDown: false,
   })
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       switch (event.code) {
         case 'KeyW':
-        case 'ArrowUp':
           keysRef.current.forward = true
           break
         case 'KeyS':
-        case 'ArrowDown':
           keysRef.current.back = true
           break
         case 'KeyA':
-        case 'ArrowLeft':
           keysRef.current.left = true
           break
         case 'KeyD':
-        case 'ArrowRight':
           keysRef.current.right = true
+          break
+        case 'ArrowLeft':
+          keysRef.current.rotateLeft = true
+          break
+        case 'ArrowRight':
+          keysRef.current.rotateRight = true
+          break
+        case 'ArrowUp':
+          keysRef.current.rotateUp = true
+          break
+        case 'ArrowDown':
+          keysRef.current.rotateDown = true
           break
         default:
           break
@@ -204,20 +217,28 @@ function useKeyboard() {
     const onKeyUp = (event: KeyboardEvent) => {
       switch (event.code) {
         case 'KeyW':
-        case 'ArrowUp':
           keysRef.current.forward = false
           break
         case 'KeyS':
-        case 'ArrowDown':
           keysRef.current.back = false
           break
         case 'KeyA':
-        case 'ArrowLeft':
           keysRef.current.left = false
           break
         case 'KeyD':
-        case 'ArrowRight':
           keysRef.current.right = false
+          break
+        case 'ArrowLeft':
+          keysRef.current.rotateLeft = false
+          break
+        case 'ArrowRight':
+          keysRef.current.rotateRight = false
+          break
+        case 'ArrowUp':
+          keysRef.current.rotateUp = false
+          break
+        case 'ArrowDown':
+          keysRef.current.rotateDown = false
           break
         default:
           break
@@ -264,27 +285,44 @@ function Player({
 
   const positionRef = useRef<Vector3>(stateRef.current.position)
   const forwardRef = useRef<Vector3>(stateRef.current.forward)
+  const yawRef = useRef<number>(0)
+  const pitchRef = useRef<number>(0)
 
   // helper cylinder is rendered as a child mesh in JSX below
 
   useFrame((state, delta) => {
     const { camera } = state
 
+    // Rotation from arrow keys
+    const rotSpeed = 1.8 // radians per second
+    if (keys.current.rotateLeft) yawRef.current += rotSpeed * delta
+    if (keys.current.rotateRight) yawRef.current -= rotSpeed * delta
+    if (keys.current.rotateUp) pitchRef.current = Math.min(0.8, pitchRef.current + rotSpeed * delta)
+    if (keys.current.rotateDown) pitchRef.current = Math.max(-0.4, pitchRef.current - rotSpeed * delta)
+
+    // Update forward vector from yaw
+    forwardRef.current.set(Math.sin(yawRef.current), 0, -Math.cos(yawRef.current)).normalize()
+
+    // Movement relative to forward/right
     const move = new Vector3()
-    if (keys.current.forward) move.z -= 1
-    if (keys.current.back) move.z += 1
-    if (keys.current.left) move.x -= 1
-    if (keys.current.right) move.x += 1
+    if (keys.current.forward) move.add(forwardRef.current)
+    if (keys.current.back) move.add(forwardRef.current.clone().negate())
+    const right = new Vector3(forwardRef.current.z, 0, -forwardRef.current.x).normalize()
+    if (keys.current.left) move.add(right.clone().negate())
+    if (keys.current.right) move.add(right)
 
     if (move.length() > 0) {
       move.normalize().multiplyScalar(delta * 5)
       positionRef.current.add(move)
     }
 
+    // Keep player on flat surface
     positionRef.current.y = sampleSurfaceHeight(positionRef.current, terrain.heights) + PLAYER_HEIGHT
 
+    // Camera follows player and looks in forward direction with pitch
+    const lookAt = positionRef.current.clone().add(forwardRef.current.clone().setY(Math.tan(pitchRef.current)))
     camera.position.copy(positionRef.current)
-    camera.lookAt(positionRef.current.clone().add(forwardRef.current))
+    camera.lookAt(lookAt)
 
     stateRef.current.position.copy(positionRef.current)
     stateRef.current.forward.copy(forwardRef.current)
