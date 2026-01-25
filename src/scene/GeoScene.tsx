@@ -603,9 +603,8 @@ function TerrainVoxels({ terrain, setTerrain, subVoxels, setSubVoxels }: { terra
       }
     }
 
-    // Replace the clicked full voxel with the remaining sub-voxels stored separately
+    // Permanently remove the clicked voxel (do not add sub-voxels)
     setTerrain({ ...terrain, positions: newPositions, colors: newColors })
-    setSubVoxels((prev) => prev.concat(staticPositions))
   }
 
   return (
